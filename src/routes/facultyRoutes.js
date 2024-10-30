@@ -8,12 +8,12 @@ const Assignment = require('../models/Assignment');
 const Contest = require('../models/Contest');
 const multer = require('multer');
 const csv = require('csv-parser');
-const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const { sendWelcomeEmail } = require('../utils/emailService');
+
+// Configure multer to use memory storage
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
-const cloudinary = require('../config/cloudinary');
 
 // Get faculty profile
 router.get('/profile', auth, isFaculty, async (req, res) => {
@@ -528,7 +528,7 @@ router.delete('/contests/:id', auth, isFaculty, async (req, res) => {
   }
 });
 
-// Import students from CSV
+// Update the import students route
 router.post('/students/import', auth, isFaculty, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -539,74 +539,84 @@ router.post('/students/import', auth, isFaculty, upload.single('file'), async (r
     const errors = [];
     const successfulImports = [];
 
-    fs.createReadStream(req.file.path)
-      .pipe(csv())
-      .on('data', (data) => results.push(data))
-      .on('end', async () => {
-        for (const row of results) {
-          try {
-            const email = row.email.toLowerCase();
-            const regNumber = row.regNumber.toString();
-            
-            // Check if user exists
-            const existingUser = await User.findOne({
-              $or: [{ email }, { regNumber }]
-            });
-            
-            if (existingUser) {
-              errors.push(`User with email ${email} or registration number ${regNumber} already exists`);
-              continue;
-            }
+    // Convert buffer to string and process CSV
+    const fileContent = req.file.buffer.toString('utf-8');
+    const rows = fileContent.split('\n');
+    
+    // Process header row
+    const header = rows[0].trim().split(',');
+    
+    // Process data rows
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i].trim();
+      if (!row) continue; // Skip empty rows
+      
+      const values = row.split(',');
+      const data = {};
+      header.forEach((h, index) => {
+        data[h.trim()] = values[index]?.trim();
+      });
 
-            // Create new student with registration number as password
-            const newUser = new User({
-              name: row.name,
-              email,
-              regNumber,
-              password: regNumber, // Let the pre-save middleware handle hashing
-              role: 'student',
-              isVerified: true
-            });
-
-            await newUser.save();
-            console.log('Student imported successfully:', {
-              email,
-              regNumber
-            });
-            
-            successfulImports.push(row);
-
-            // Send welcome email
-            try {
-              await sendWelcomeEmail({
-                name: row.name,
-                email,
-                regNumber,
-                password: regNumber,
-                loginUrl: process.env.FRONTEND_URL || 'http://localhost:5173'
-              });
-            } catch (emailError) {
-              console.error(`Failed to send welcome email to ${email}:`, emailError);
-            }
-          } catch (error) {
-            errors.push(`Error adding user ${row.email}: ${error.message}`);
-          }
+      try {
+        const email = data.email?.toLowerCase();
+        const regNumber = data.regNumber?.toString();
+        
+        if (!email || !regNumber) {
+          errors.push(`Row ${i}: Missing email or registration number`);
+          continue;
         }
 
-        // Clean up uploaded file
-        fs.unlinkSync(req.file.path);
-
-        res.json({
-          message: `Imported ${successfulImports.length} students successfully`,
-          errors: errors.length > 0 ? errors : undefined
+        // Check if user exists
+        const existingUser = await User.findOne({
+          $or: [{ email }, { regNumber }]
         });
-      });
+        
+        if (existingUser) {
+          errors.push(`User with email ${email} or registration number ${regNumber} already exists`);
+          continue;
+        }
+
+        // Create new student
+        const newUser = new User({
+          name: data.name,
+          email,
+          regNumber,
+          password: regNumber, // Will be hashed by pre-save middleware
+          role: 'student',
+          isVerified: true
+        });
+
+        await newUser.save();
+        successfulImports.push(data);
+
+        // Send welcome email
+        try {
+          await sendWelcomeEmail({
+            name: data.name,
+            email,
+            regNumber,
+            password: regNumber,
+            loginUrl: process.env.FRONTEND_URL || 'http://localhost:5173'
+          });
+        } catch (emailError) {
+          console.error(`Failed to send welcome email to ${email}:`, emailError);
+        }
+      } catch (error) {
+        errors.push(`Error adding user ${data.email}: ${error.message}`);
+      }
+    }
+
+    res.json({
+      message: `Imported ${successfulImports.length} students successfully`,
+      errors: errors.length > 0 ? errors : undefined,
+      successfulImports
+    });
   } catch (error) {
     console.error('Error importing students:', error);
-    if (req.file) {
-      fs.unlinkSync(req.file.path);
-    }
-    res.status(500).json({ message: 'Error importing students', error: error.message });
+    res.status(500).json({ 
+      message: 'Error importing students', 
+      error: error.message 
+    });
   }
 });
 
