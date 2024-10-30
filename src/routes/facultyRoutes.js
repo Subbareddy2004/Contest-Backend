@@ -10,10 +10,15 @@ const multer = require('multer');
 const csv = require('csv-parser');
 const bcrypt = require('bcryptjs');
 const { sendWelcomeEmail } = require('../utils/emailService');
+const cloudinary = require('../config/cloudinary');
 
-// Configure multer to use memory storage
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+// Configure multer to use memory storage only
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  }
+});
 
 // Get faculty profile
 router.get('/profile', auth, isFaculty, async (req, res) => {
@@ -535,11 +540,7 @@ router.post('/students/import', auth, isFaculty, upload.single('file'), async (r
       return res.status(400).json({ message: 'No file uploaded' });
     }
 
-    const results = [];
-    const errors = [];
-    const successfulImports = [];
-
-    // Convert buffer to string and process CSV
+    // Process the file buffer directly
     const fileContent = req.file.buffer.toString('utf-8');
     const rows = fileContent.split('\n');
     
@@ -764,7 +765,9 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
       `data:${req.file.mimetype};base64,${fileStr}`,
       { 
         folder: 'contest-platform',
-        resource_type: 'auto'
+        resource_type: 'auto',
+        allowed_formats: ['jpg', 'png', 'pdf', 'csv'], // adjust as needed
+        max_bytes: 5 * 1024 * 1024 // 5MB limit
       }
     );
 
@@ -774,7 +777,10 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
     });
   } catch (error) {
     console.error('Error uploading file:', error);
-    res.status(500).json({ message: 'Error uploading file' });
+    res.status(500).json({ 
+      message: 'Error uploading file',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
