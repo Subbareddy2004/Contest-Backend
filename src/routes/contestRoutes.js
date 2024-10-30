@@ -7,20 +7,27 @@ const Contest = require('../models/Contest');
 router.get('/', auth, async (req, res) => {
   try {
     const contests = await Contest.find()
+      .populate('createdBy', 'name')
       .populate('problems.problem', 'title difficulty')
-      .populate('participants.user', '_id name')
-      .sort('-createdAt')
-      .lean();
+      .sort('-createdAt');
 
-    // Add user registration status to each contest
-    const contestsWithStatus = contests.map(contest => ({
-      ...contest,
-      isRegistered: contest.participants.some(p => 
-        p.user._id.toString() === req.user.id.toString()
-      )
-    }));
+    // Filter contests based on user role and participation
+    const filteredContests = contests.map(contest => {
+      const isCreator = contest.createdBy._id.toString() === req.user.id;
+      const hasParticipated = contest.submissions?.some(sub => 
+        sub.student && sub.student.toString() === req.user.id
+      );
 
-    res.json(contestsWithStatus);
+      return {
+        ...contest.toObject(),
+        isCreator,
+        hasParticipated,
+        // Only show submissions count to faculty
+        submissionsCount: req.user.role === 'faculty' ? contest.submissions?.length : undefined
+      };
+    });
+
+    res.json(filteredContests);
   } catch (error) {
     console.error('Error fetching contests:', error);
     res.status(500).json({ message: 'Error fetching contests' });
