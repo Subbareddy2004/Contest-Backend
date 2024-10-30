@@ -11,17 +11,5 @@
         "src": "/(.*)",
         "dest": "src/index.js"
       }
-    ],
-    "env": {
-      "NODE_ENV": "production",
-      "MONGODB_URI": "@mongodb_uri",
-      "JWT_SECRET": "@jwt_secret",
-      "EMAIL_SERVICE": "gmail",
-      "EMAIL_USER": "@email_user",
-      "EMAIL_PASSWORD": "@email_password",
-      "FRONTEND_URL": "https://eyelabs.vercel.app",
-      "CLOUDINARY_CLOUD_NAME": "dzarto4wt",
-      "CLOUDINARY_API_KEY": "573111413949189",
-      "CLOUDINARY_API_SECRET": "@cloudinary_api_secret"
-    }
+    ]
   }
