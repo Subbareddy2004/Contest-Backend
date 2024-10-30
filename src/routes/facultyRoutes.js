@@ -11,9 +11,9 @@ const csv = require('csv-parser');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const { sendWelcomeEmail } = require('../utils/emailService');
-
-// Configure multer for file upload
-const upload = multer({ dest: 'uploads/' });
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
+const cloudinary = require('../config/cloudinary');
 
 // Get faculty profile
 router.get('/profile', auth, isFaculty, async (req, res) => {
@@ -738,6 +738,33 @@ router.put('/students/:id', auth, isFaculty, async (req, res) => {
   } catch (error) {
     console.error('Error updating student:', error);
     res.status(500).json({ message: 'Error updating student' });
+  }
+});
+
+// File upload route
+router.post('/upload', auth, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    // Convert buffer to base64
+    const fileStr = req.file.buffer.toString('base64');
+    const uploadResponse = await cloudinary.uploader.upload(
+      `data:${req.file.mimetype};base64,${fileStr}`,
+      { 
+        folder: 'contest-platform',
+        resource_type: 'auto'
+      }
+    );
+
+    res.json({ 
+      url: uploadResponse.secure_url,
+      public_id: uploadResponse.public_id 
+    });
+  } catch (error) {
+    console.error('Error uploading file:', error);
+    res.status(500).json({ message: 'Error uploading file' });
   }
 });
 
