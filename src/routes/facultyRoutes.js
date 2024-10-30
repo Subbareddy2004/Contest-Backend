@@ -12,7 +12,7 @@ const bcrypt = require('bcryptjs');
 const { sendWelcomeEmail } = require('../utils/emailService');
 const cloudinary = require('../config/cloudinary');
 
-// Configure multer to use memory storage only
+// IMPORTANT: Replace the existing multer configuration with this one
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
