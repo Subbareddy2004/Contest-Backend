@@ -3,6 +3,23 @@ const router = express.Router();
 const { auth } = require('../middleware/auth');
 const Contest = require('../models/Contest');
 
+// Move this route to the top, before any /:id routes
+router.get('/upcoming', auth, async (req, res) => {
+  try {
+    const contests = await Contest.find({
+      startTime: { $gt: new Date() }
+    })
+    .sort({ startTime: 1 })
+    .limit(5)
+    .select('title startTime');
+    
+    res.json(contests);
+  } catch (error) {
+    console.error('Error fetching upcoming contests:', error);
+    res.status(500).json({ message: 'Error fetching upcoming contests' });
+  }
+});
+
 // Get all contests
 router.get('/', auth, async (req, res) => {
   try {

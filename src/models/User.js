@@ -20,22 +20,48 @@ const userSchema = new mongoose.Schema({
   },
   regNumber: {
     type: String,
-    required: true,
-    unique: true,
-    trim: true
+    validate: {
+      validator: function(v) {
+        // For students, regNumber must be provided and non-empty
+        // For faculty, regNumber should be undefined
+        return this.role === 'faculty' || (this.role === 'student' && v && v.length > 0);
+      },
+      message: 'Registration number is required for students'
+    },
+    // Remove unique and sparse options from schema level
   },
   role: {
     type: String,
-    required: true,
     enum: ['student', 'faculty'],
-    default: 'student'
+    required: true
   },
   isVerified: {
     type: Boolean,
     default: false
+  },
+  score: {
+    type: Number,
+    default: 0
   }
 }, {
   timestamps: true
+});
+
+// Pre-save middleware to handle regNumber
+userSchema.pre('save', function(next) {
+  if (this.role === 'faculty') {
+    this.regNumber = undefined;
+  }
+  next();
+});
+
+// Create a unique index on regNumber that ignores null/undefined values
+userSchema.index({ 
+  regNumber: 1 
+}, { 
+  unique: true, 
+  sparse: true,
+  partialFilterExpression: { regNumber: { $type: "string" } }
 });
 
 // Hash password before saving

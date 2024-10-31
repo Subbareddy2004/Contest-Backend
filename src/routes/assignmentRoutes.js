@@ -86,4 +86,20 @@ router.post('/:id/submit', auth, async (req, res) => {
   }
 });
 
+router.get('/upcoming', auth, async (req, res) => {
+  try {
+    const assignments = await Assignment.find({
+      dueDate: { $gt: new Date() }
+    })
+    .sort({ dueDate: 1 })
+    .limit(5)
+    .select('title dueDate');
+    
+    res.json(assignments);
+  } catch (error) {
+    console.error('Error fetching upcoming assignments:', error);
+    res.status(500).json({ message: 'Error fetching upcoming assignments' });
+  }
+});
+
 module.exports = router;

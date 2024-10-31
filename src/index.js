@@ -11,6 +11,7 @@ const multer = require('multer');
 const assignmentRoutes = require('./routes/assignmentRoutes');
 const submissionRoutes = require('./routes/submissionRoutes');
 const facultyRoutes = require('./routes/facultyRoutes');
+const leaderboardRoutes = require('./routes/leaderboardRoutes');
 const { requestLogger } = require('./middleware/logging');
 
 const app = express();
@@ -39,6 +40,7 @@ app.use('/api/contests', contestRoutes);
 app.use('/api/students', studentRoutes);
 app.use('/api/assignments', assignmentRoutes);
 app.use('/api/submissions', submissionRoutes);
+app.use('/api/leaderboard', leaderboardRoutes);
 
 // MongoDB connection
 mongoose.connect(process.env.MONGODB_URI, {
