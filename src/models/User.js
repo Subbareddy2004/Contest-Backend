@@ -42,6 +42,10 @@ const userSchema = new mongoose.Schema({
   score: {
     type: Number,
     default: 0
+  },
+  problemsSolved: {
+    type: Number,
+    default: 0
   }
 }, {
   timestamps: true

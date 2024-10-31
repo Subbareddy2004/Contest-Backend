@@ -117,4 +117,56 @@ router.get('/contests/upcoming', auth, async (req, res) => {
   }
 });
 
+// Add these new routes
+router.get('/stats/:id', auth, async (req, res) => {
+  try {
+    const userId = req.params.id;
+    
+    // Get problems solved count
+    const problemsSolved = await Submission.countDocuments({
+      userId,
+      status: 'Accepted'
+    });
+
+    // Get completed assignments count
+    const completedAssignments = await Assignment.countDocuments({
+      'submissions.student': userId,
+      'submissions.status': 'Completed'
+    });
+
+    // Get college rank
+    const allStudents = await User.find({ role: 'student' })
+      .select('_id problemsSolved')
+      .sort({ problemsSolved: -1 });
+      
+    const rank = allStudents.findIndex(student => 
+      student._id.toString() === userId.toString()
+    ) + 1;
+
+    res.json({
+      problemsSolved,
+      completedAssignments,
+      collegeRank: rank || 'N/A'
+    });
+  } catch (error) {
+    console.error('Error fetching student stats:', error);
+    res.status(500).json({ message: 'Error fetching student stats' });
+  }
+});
+
+// Get leaderboard
+router.get('/leaderboard', auth, async (req, res) => {
+  try {
+    const leaderboard = await User.find({ role: 'student' })
+      .select('name regNumber problemsSolved')
+      .sort({ problemsSolved: -1 })
+      .limit(100);
+
+    res.json(leaderboard);
+  } catch (error) {
+    console.error('Error fetching leaderboard:', error);
+    res.status(500).json({ message: 'Error fetching leaderboard' });
+  }
+});
+
 module.exports = router;

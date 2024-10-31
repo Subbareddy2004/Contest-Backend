@@ -3,6 +3,7 @@ const router = express.Router();
 const Submission = require('../models/Submission');
 const { auth } = require('../middleware/auth');
 const { isFaculty } = require('../middleware/faculty');
+const User = require('../models/User');
 
 // Get submission statistics
 router.get('/stats', auth, isFaculty, async (req, res) => {
