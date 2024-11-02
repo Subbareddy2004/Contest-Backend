@@ -9,7 +9,7 @@ const Assignment = require('../models/Assignment');
 const Submission = require('../models/Submission');
 const csv = require('csv-parser');
 const { Readable } = require('stream');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const multer = require('multer');
 
 // Configure multer for memory storage
