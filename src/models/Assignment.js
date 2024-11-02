@@ -57,4 +57,7 @@ const assignmentSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Add index for better query performance
+assignmentSchema.index({ createdBy: 1 });
+
 module.exports = mongoose.model('Assignment', assignmentSchema);

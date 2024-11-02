@@ -1,35 +1,5 @@
 const mongoose = require('mongoose');
 
-const submissionSchema = new mongoose.Schema({
-  student: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  problem: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Problem',
-    required: true
-  },
-  code: {
-    type: String,
-    required: true
-  },
-  language: {
-    type: String,
-    required: true
-  },
-  status: {
-    type: String,
-    enum: ['Pending', 'Accepted', 'Wrong Answer', 'Time Limit Exceeded'],
-    default: 'Pending'
-  },
-  submittedAt: {
-    type: Date,
-    default: Date.now
-  }
-});
-
 const contestSchema = new mongoose.Schema({
   title: {
     type: String,
@@ -44,32 +14,42 @@ const contestSchema = new mongoose.Schema({
     type: Date,
     required: true
   },
+  endTime: {
+    type: Date
+  },
   duration: {
     type: Number,
-    required: true
+    required: true,
+    min: 1
   },
   problems: [{
-    problem: { type: mongoose.Schema.Types.ObjectId, ref: 'Problem' },
-    points: { type: Number, required: true, default: 0 }
+    problem: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Problem',
+      required: true
+    },
+    points: {
+      type: Number,
+      default: 100
+    }
   }],
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
   },
-  participants: [{
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    joinedAt: {
-      type: Date,
-      default: Date.now
-    }
-  }],
-  submissions: [submissionSchema]
-}, {
-  timestamps: true
+  isPublished: {
+    type: Boolean,
+    default: false
+  }
+});
+
+// Calculate endTime before saving
+contestSchema.pre('save', function(next) {
+  if (this.startTime && this.duration) {
+    this.endTime = new Date(new Date(this.startTime).getTime() + this.duration * 60000);
+  }
+  next();
 });
 
 module.exports = mongoose.model('Contest', contestSchema);

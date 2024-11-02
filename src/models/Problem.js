@@ -47,4 +47,7 @@ const problemSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Add index for better query performance
+problemSchema.index({ createdBy: 1 });
+
 module.exports = mongoose.model('Problem', problemSchema);

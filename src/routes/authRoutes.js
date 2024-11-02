@@ -1,46 +1,45 @@
 const express = require('express');
 const router = express.Router();
-const { register, login } = require('../controllers/authController');
-const User = require('../models/User');
-const bcrypt = require('bcryptjs');
-const { auth } = require('../middleware/auth');
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+const { auth } = require('../middleware/auth');
+const bcrypt = require('bcrypt');
 
-router.post('/register', register);
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     console.log('Login attempt:', { email, password: '***' });
 
-    // Find user by email or registration number
-    const user = await User.findOne({
-      $or: [
-        { email: email.toLowerCase() },
-        { regNumber: email }
-      ]
+    const user = await User.findOne({ email });
+    if (!user) {
+      console.log('User not found:', email);
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    console.log('Found user:', {
+      id: user._id,
+      email: user.email,
+      role: user.role,
+      hasPassword: !!user.password
     });
 
-    console.log('Found user:', user ? {
-      email: user.email,
-      regNumber: user.regNumber,
-      passwordLength: user.password.length
-    } : 'No');
+    console.log('Stored hashed password:', user.password);
+    console.log('Attempting to match with:', password);
 
-    if (!user) {
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-
-    // Compare passwords using the schema method
-    const isMatch = await user.comparePassword(password);
-    console.log('Final password match result:', isMatch);
+    const isMatch = await bcrypt.compare(password, user.password);
+    console.log('Password match result:', isMatch);
 
     if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid credentials' });
+      console.log('Password mismatch for user:', email);
+      return res.status(401).json({ message: 'Invalid email or password' });
     }
 
-    // Generate JWT token
     const token = jwt.sign(
-      { id: user._id, role: user.role },
+      { 
+        id: user._id,
+        role: user.role,
+        email: user.email
+      },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
@@ -48,38 +47,29 @@ router.post('/login', async (req, res) => {
     res.json({
       token,
       user: {
-        _id: user._id,
+        id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role,
-        regNumber: user.regNumber
+        role: user.role
       }
     });
+
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ message: 'Error logging in' });
+    res.status(500).json({ message: 'Error during login' });
   }
 });
 
-router.put('/change-password', auth, async (req, res) => {
+// Get user profile
+router.get('/profile', auth, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
-    const user = await User.findById(req.user.id);
-
-    // Verify current password using the schema method
-    const isMatch = await user.comparePassword(currentPassword);
-    if (!isMatch) {
-      return res.status(400).json({ message: 'Current password is incorrect' });
+    const user = await User.findById(req.user.id).select('-password');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
     }
-
-    // Update password (will be hashed by pre-save middleware)
-    user.password = newPassword;
-    await user.save();
-
-    res.json({ message: 'Password updated successfully' });
+    res.json(user);
   } catch (error) {
-    console.error('Error updating password:', error);
-    res.status(500).json({ message: 'Error updating password' });
+    res.status(500).json({ message: 'Error fetching profile' });
   }
 });
 

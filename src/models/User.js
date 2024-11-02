@@ -4,89 +4,52 @@ const bcrypt = require('bcryptjs');
 const userSchema = new mongoose.Schema({
   name: {
     type: String,
-    required: true,
-    trim: true
+    required: true
   },
   email: {
     type: String,
     required: true,
-    unique: true,
-    trim: true,
-    lowercase: true
+    unique: true
   },
   password: {
     type: String,
     required: true
   },
-  regNumber: {
-    type: String,
-    validate: {
-      validator: function(v) {
-        // For students, regNumber must be provided and non-empty
-        // For faculty, regNumber should be undefined
-        return this.role === 'faculty' || (this.role === 'student' && v && v.length > 0);
-      },
-      message: 'Registration number is required for students'
-    },
-    // Remove unique and sparse options from schema level
-  },
   role: {
     type: String,
-    enum: ['student', 'faculty'],
+    enum: ['admin', 'faculty', 'student'],
     required: true
   },
-  isVerified: {
-    type: Boolean,
-    default: false
+  regNumber: {
+    type: String,
+    sparse: true
   },
-  score: {
-    type: Number,
-    default: 0
-  },
-  problemsSolved: {
-    type: Number,
-    default: 0
-  }
-}, {
-  timestamps: true
-});
-
-// Pre-save middleware to handle regNumber
-userSchema.pre('save', function(next) {
-  if (this.role === 'faculty') {
-    this.regNumber = undefined;
-  }
-  next();
-});
-
-// Create a unique index on regNumber that ignores null/undefined values
-userSchema.index({ 
-  regNumber: 1 
-}, { 
-  unique: true, 
-  sparse: true,
-  partialFilterExpression: { regNumber: { $type: "string" } }
-});
-
-// Hash password before saving
-userSchema.pre('save', async function(next) {
-  try {
-    // Only hash the password if it has been modified or is new
-    if (!this.isModified('password')) {
-      return next();
+  addedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: function() {
+      return this.role === 'student';
     }
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
 
-    // Convert password to string if it's not already
-    const plainTextPassword = this.password.toString();
+// Hash password before saving if it's modified
+userSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) return next();
+  
+  try {
+    // Log for debugging
+    console.log('Hashing password for user:', this.email);
     
-    // Use bcryptjs instead of bcrypt
-    const salt = await bcrypt.genSalt(8);
-    this.password = await bcrypt.hash(plainTextPassword, salt);
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
     
-    console.log('Password hashed:', {
-      original: plainTextPassword,
-      hashed: this.password
-    });
+    // Log hashed password for debugging
+    console.log('Password hashed successfully');
     
     next();
   } catch (error) {
@@ -95,28 +58,23 @@ userSchema.pre('save', async function(next) {
   }
 });
 
-// Method to check password
+// Method to compare passwords
 userSchema.methods.comparePassword = async function(candidatePassword) {
   try {
-    // Ensure the candidate password is a string
-    const candidate = candidatePassword.toString().trim();
+    // Debug log
+    console.log('Comparing passwords for:', this.email);
     
-    console.log('Password comparison:', {
-      candidatePassword: candidate,
-      hashedPassword: this.password,
-      candidateLength: candidate.length,
-    });
+    // Use bcrypt.compare
+    const isMatch = await bcrypt.compare(candidatePassword, this.password);
     
-    // Use bcryptjs.compare
-    const isMatch = await bcrypt.compare(candidate, this.password);
+    // Debug log
     console.log('Password match result:', isMatch);
+    
     return isMatch;
   } catch (error) {
-    console.error('Password comparison error:', error);
-    throw error;
+    console.error('Error comparing passwords:', error);
+    return false;
   }
 };
 
-const User = mongoose.model('User', userSchema);
-
-module.exports = User;
+module.exports = mongoose.model('User', userSchema);

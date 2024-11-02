@@ -11,6 +11,8 @@ const csv = require('csv-parser');
 const bcrypt = require('bcryptjs');
 const { sendWelcomeEmail } = require('../utils/emailService');
 const cloudinary = require('../config/cloudinary');
+const Submission = require('../models/Submission');
+const checkOwnership = require('../middleware/checkOwnership');
 
 // IMPORTANT: Replace the existing multer configuration with this one
 const upload = multer({
@@ -57,26 +59,36 @@ router.put('/profile', auth, isFaculty, async (req, res) => {
 // Get dashboard stats
 router.get('/dashboard-stats', auth, isFaculty, async (req, res) => {
   try {
-    // Add your dashboard stats logic here
+    const [totalStudents, totalAssignments, totalProblems, totalContests] = await Promise.all([
+      User.countDocuments({ addedBy: req.user.id, role: 'student' }),
+      Assignment.countDocuments({ createdBy: req.user.id }),
+      Problem.countDocuments({ createdBy: req.user.id }),
+      Contest.countDocuments({ createdBy: req.user.id })
+    ]);
+
     res.json({
-      totalStudents: 0,
-      totalAssignments: 0,
-      totalSubmissions: 0
+      totalStudents,
+      totalAssignments,
+      totalProblems,
+      totalContests
     });
   } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
     res.status(500).json({ message: 'Error fetching dashboard stats' });
   }
 });
 
-// Get faculty problems
+// Get problems
 router.get('/problems', auth, isFaculty, async (req, res) => {
   try {
     console.log('Fetching problems for faculty:', req.user.id);
-    const problems = await Problem.find({ createdBy: req.user.id })
-      .sort('-createdAt');
+    const problems = await Problem.find({ 
+      createdBy: req.user.id  // Only get problems created by current faculty
+    }).sort('-createdAt');
+
     res.json(problems);
   } catch (error) {
-    console.error('Error fetching faculty problems:', error);
+    console.error('Error fetching problems:', error);
     res.status(500).json({ message: 'Error fetching problems' });
   }
 });
@@ -160,9 +172,16 @@ router.delete('/problems/:id', auth, isFaculty, async (req, res) => {
 // Get all assignments
 router.get('/assignments', auth, isFaculty, async (req, res) => {
   try {
-    const assignments = await Assignment.find({ createdBy: req.user.id })
-      .populate('problems')
-      .sort('-createdAt');
+    console.log('Fetching assignments for faculty:', req.user.id);
+    const assignments = await Assignment.find({ 
+      createdBy: req.user.id  // Only get assignments created by current faculty
+    })
+    .populate({
+      path: 'problems',
+      match: { createdBy: req.user.id }
+    })
+    .sort('-createdAt');
+
     res.json(assignments);
   } catch (error) {
     console.error('Error fetching assignments:', error);
@@ -173,28 +192,15 @@ router.get('/assignments', auth, isFaculty, async (req, res) => {
 // Create new assignment
 router.post('/assignments', auth, isFaculty, async (req, res) => {
   try {
-    const { title, description, dueDate, problems } = req.body;
-
-    // Validate required fields
-    if (!title || !description || !dueDate || !problems) {
-      return res.status(400).json({ 
-        message: 'Missing required fields. Please provide title, description, dueDate, and problems.' 
-      });
-    }
-
     const assignment = new Assignment({
-      title,
-      description,
-      dueDate,
-      problems,
+      ...req.body,
       createdBy: req.user.id
     });
-
     await assignment.save();
     res.status(201).json(assignment);
   } catch (error) {
-    console.warn('Error creating assignment:', error);
-    res.status(500).json({ message: 'Error creating assignment', error: error.message });
+    console.error('Error creating assignment:', error);
+    res.status(500).json({ message: 'Error creating assignment' });
   }
 });
 
@@ -205,12 +211,12 @@ router.put('/assignments/:id', auth, isFaculty, async (req, res) => {
       { _id: req.params.id, createdBy: req.user.id },
       req.body,
       { new: true }
-    ).populate('problems');
-
+    );
+    
     if (!assignment) {
       return res.status(404).json({ message: 'Assignment not found' });
     }
-
+    
     res.json(assignment);
   } catch (error) {
     console.error('Error updating assignment:', error);
@@ -238,22 +244,8 @@ router.delete('/assignments/:id', auth, isFaculty, async (req, res) => {
 });
 
 // Get single assignment
-router.get('/assignments/:id', auth, isFaculty, async (req, res) => {
-  try {
-    const assignment = await Assignment.findOne({
-      _id: req.params.id,
-      createdBy: req.user.id
-    }).populate('problems');
-
-    if (!assignment) {
-      return res.status(404).json({ message: 'Assignment not found' });
-    }
-
-    res.json(assignment);
-  } catch (error) {
-    console.error('Error fetching assignment:', error);
-    res.status(500).json({ message: 'Error fetching assignment' });
-  }
+router.get('/assignments/:id', auth, isFaculty, checkOwnership(Assignment), async (req, res) => {
+  res.json(req.document);
 });
 
 // Update the submissions route
@@ -275,9 +267,11 @@ router.get('/assignments/:id/submissions', auth, isFaculty, async (req, res) => 
       return res.status(404).json({ message: 'Assignment not found' });
     }
 
-    // Get all students
-    const allStudents = await User.find({ role: 'student' })
-      .select('name email');
+    // Get only students added by this faculty
+    const allStudents = await User.find({ 
+      role: 'student',
+      addedBy: req.user.id  // Only get students added by this faculty
+    }).select('name email');
 
     // Create a map of existing submissions
     const submissionMap = new Map(
@@ -307,65 +301,49 @@ router.get('/assignments/:id/submissions', auth, isFaculty, async (req, res) => 
   }
 });
 
-// Add this new route for contest leaderboard
+// Update the contest leaderboard route
 router.get('/contests/:id/leaderboard', auth, isFaculty, async (req, res) => {
   try {
     const contest = await Contest.findOne({
       _id: req.params.id,
       createdBy: req.user.id
-    }).populate({
-      path: 'problems.problem',
-      select: 'title'
-    }).populate({
-      path: 'submissions',
-      populate: {
-        path: 'student',
-        select: 'name email'
-      }
-    });
+    }).populate('problems');  // Make sure to populate problems
 
     if (!contest) {
       return res.status(404).json({ message: 'Contest not found' });
     }
 
-    // Get all students
-    const allStudents = await User.find({ role: 'student' })
-      .select('name email');
+    // Get only students added by this faculty
+    const students = await User.find({ 
+      role: 'student',
+      addedBy: req.user.id 
+    }).select('name email');
 
-    // Create submission map for quick lookup
-    const submissionMap = new Map(
-      contest.submissions.map(sub => [sub.student._id.toString(), sub])
-    );
-
-    // Create leaderboard with all students
-    const leaderboard = allStudents.map(student => {
-      const submission = submissionMap.get(student._id.toString());
-      return {
-        student: {
-          _id: student._id,
-          name: student.name,
-          email: student.email
-        },
-        status: submission ? 'Submitted' : 'Pending',
-        score: submission?.score || 0,
-        submittedAt: submission?.submittedAt || null,
-        problemScores: submission?.problemScores || [],
-        totalTime: submission ? 
-          (new Date(submission.submittedAt) - new Date(contest.startTime)) / 1000 / 60 : 
-          null
-      };
-    });
-
-    // Sort by score (descending) and submission time
-    leaderboard.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      if (!a.submittedAt) return 1;
-      if (!b.submittedAt) return -1;
-      return a.totalTime - b.totalTime;
-    });
+    // Initialize leaderboard with all students
+    const leaderboard = students.map(student => ({
+      student: {
+        _id: student._id,
+        name: student.name,
+        email: student.email
+      },
+      status: 'Not Started',
+      score: 0,
+      submittedAt: null,
+      problemScores: contest.problems.map(p => ({
+        problemId: p._id,
+        score: 0,
+        status: 'Not Attempted'
+      }))
+    }));
 
     res.json({
-      contest,
+      contest: {
+        _id: contest._id,
+        title: contest.title,
+        startTime: contest.startTime,
+        endTime: contest.endTime,
+        problems: contest.problems
+      },
       leaderboard
     });
   } catch (error) {
@@ -426,87 +404,128 @@ router.get('/contests/:id/submissions', auth, isFaculty, async (req, res) => {
   }
 });
 
-// Get all contests
+// Get all contests for faculty
 router.get('/contests', auth, isFaculty, async (req, res) => {
   try {
     const contests = await Contest.find({ createdBy: req.user.id })
-      .populate({
-        path: 'problems.problem',
-        select: 'title difficulty'
-      })
-      .populate({
-        path: 'submissions',
-        select: '_id'
-      })
+      .populate('problems.problem')
       .sort('-createdAt');
-    res.json(contests);
+
+    const formattedContests = contests.map(contest => {
+      const duration = Math.round((new Date(contest.endTime) - new Date(contest.startTime)) / (1000 * 60));
+      const now = new Date();
+      let status = 'Draft';
+      
+      if (contest.isPublished) {
+        if (now < new Date(contest.startTime)) status = 'Upcoming';
+        else if (now > new Date(contest.endTime)) status = 'Completed';
+        else status = 'Active';
+      }
+
+      return {
+        _id: contest._id,
+        title: contest.title,
+        startTime: contest.startTime,
+        endTime: contest.endTime,
+        duration: duration,
+        status: status,
+        problemCount: contest.problems.length,
+        isPublished: contest.isPublished,
+        description: contest.description,
+        problems: contest.problems
+      };
+    });
+
+    res.json(formattedContests);
   } catch (error) {
     console.error('Error fetching contests:', error);
     res.status(500).json({ message: 'Error fetching contests' });
   }
 });
 
+// Update contest publish status
+router.patch('/contests/:id/publish', auth, isFaculty, async (req, res) => {
+  try {
+    const contest = await Contest.findOneAndUpdate(
+      { _id: req.params.id, createdBy: req.user.id },
+      { isPublished: req.body.isPublished },
+      { new: true }
+    );
+    
+    if (!contest) {
+      return res.status(404).json({ message: 'Contest not found' });
+    }
+    
+    res.json(contest);
+  } catch (error) {
+    console.error('Error updating contest publish status:', error);
+    res.status(500).json({ message: 'Error updating contest' });
+  }
+});
+
+// Helper function to determine contest status
+const getContestStatus = (startTime, endTime) => {
+  if (!startTime || !endTime) return 'Draft';
+  
+  const now = new Date();
+  if (now < startTime) return 'Upcoming';
+  if (now > endTime) return 'Completed';
+  return 'Active';
+};
+
 // Create contest
 router.post('/contests', auth, isFaculty, async (req, res) => {
   try {
-    const contestData = {
-      ...req.body,
+    const { title, description, startTime, duration, problems } = req.body;
+    
+    const contest = new Contest({
+      title,
+      description,
+      startTime,
+      duration,
+      problems: problems.map(p => ({
+        problem: p.problem,
+        points: p.points || 100
+      })),
       createdBy: req.user.id
-    };
-
-    // Validate required fields
-    if (!contestData.title || !contestData.startTime || !contestData.duration) {
-      return res.status(400).json({
-        message: 'Missing required fields',
-        required: ['title', 'startTime', 'duration']
-      });
-    }
-
-    // Ensure problems array is properly formatted
-    if (!Array.isArray(contestData.problems) || contestData.problems.length === 0) {
-      return res.status(400).json({
-        message: 'Contest must have at least one problem'
-      });
-    }
-
-    const contest = new Contest(contestData);
-    await contest.save();
-
-    // Populate the problems before sending response
-    await contest.populate({
-      path: 'problems.problem',
-      select: 'title difficulty'
     });
 
+    await contest.save();
     res.status(201).json(contest);
   } catch (error) {
     console.error('Error creating contest:', error);
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({
-        message: 'Validation error',
-        errors: Object.values(error.errors).map(err => err.message)
-      });
-    }
-    res.status(500).json({
-      message: 'Error creating contest',
-      error: error.message
-    });
+    res.status(500).json({ message: 'Error creating contest' });
   }
 });
 
 // Update contest
 router.put('/contests/:id', auth, isFaculty, async (req, res) => {
   try {
+    const { title, description, startTime, duration, problems } = req.body;
+    
+    // Calculate endTime based on startTime and duration
+    const endTime = new Date(new Date(startTime).getTime() + (parseInt(duration) * 60000));
+
     const contest = await Contest.findOneAndUpdate(
       { _id: req.params.id, createdBy: req.user.id },
-      req.body,
-      { new: true }
-    ).populate('problems.problem');
-    
+      {
+        title,
+        description,
+        startTime,
+        endTime,
+        duration: parseInt(duration),
+        problems: problems.map(p => ({
+          problem: p.problem,
+          points: p.points || 100
+        }))
+      },
+      { new: true, runValidators: true }
+    );
+
     if (!contest) {
       return res.status(404).json({ message: 'Contest not found' });
     }
-    
+
     res.json(contest);
   } catch (error) {
     console.error('Error updating contest:', error);
@@ -535,98 +554,74 @@ router.delete('/contests/:id', auth, isFaculty, async (req, res) => {
 
 // Update the import students route
 router.post('/students/import', auth, isFaculty, upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded' });
-    }
+  if (!req.file) {
+    return res.status(400).json({ message: 'No file uploaded' });
+  }
 
-    // Process the file buffer directly
-    const fileContent = req.file.buffer.toString('utf-8');
-    const rows = fileContent.split('\n');
+  try {
+    const results = [];
+    const fileContent = req.file.buffer.toString();
     
-    // Process header row
-    const header = rows[0].trim().split(',');
+    // Parse CSV content
+    const rows = fileContent.split('\n').slice(1); // Skip header row
     
-    // Process data rows
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i].trim();
-      if (!row) continue; // Skip empty rows
+    for (let row of rows) {
+      if (!row.trim()) continue; // Skip empty rows
       
-      const values = row.split(',');
-      const data = {};
-      header.forEach((h, index) => {
-        data[h.trim()] = values[index]?.trim();
+      const [name, email, regNumber] = row.split(',').map(field => field.trim());
+      
+      if (!name || !email || !regNumber) continue;
+
+      // Check if student already exists
+      const existingStudent = await User.findOne({ email });
+      if (existingStudent) {
+        console.log(`Skipping existing student: ${email}`);
+        continue;
+      }
+
+      // Use regNumber as password
+      const student = new User({
+        name,
+        email,
+        regNumber,
+        password: regNumber, // Will be hashed by pre-save middleware
+        role: 'student',
+        addedBy: req.user.id
       });
 
-      try {
-        const email = data.email?.toLowerCase();
-        const regNumber = data.regNumber?.toString();
-        
-        if (!email || !regNumber) {
-          errors.push(`Row ${i}: Missing email or registration number`);
-          continue;
-        }
-
-        // Check if user exists
-        const existingUser = await User.findOne({
-          $or: [{ email }, { regNumber }]
-        });
-        
-        if (existingUser) {
-          errors.push(`User with email ${email} or registration number ${regNumber} already exists`);
-          continue;
-        }
-
-        // Create new student
-        const newUser = new User({
-          name: data.name,
-          email,
-          regNumber,
-          password: regNumber, // Will be hashed by pre-save middleware
-          role: 'student',
-          isVerified: true
-        });
-
-        await newUser.save();
-        successfulImports.push(data);
-
-        // Send welcome email
-        try {
-          await sendWelcomeEmail({
-            name: data.name,
-            email,
-            regNumber,
-            password: regNumber,
-            loginUrl: process.env.FRONTEND_URL || 'http://localhost:5173'
-          });
-        } catch (emailError) {
-          console.error(`Failed to send welcome email to ${email}:`, emailError);
-        }
-      } catch (error) {
-        errors.push(`Error adding user ${data.email}: ${error.message}`);
-      }
+      await student.save();
+      results.push({ 
+        name, 
+        email, 
+        regNumber,
+        initialPassword: regNumber 
+      });
     }
 
-    res.json({
-      message: `Imported ${successfulImports.length} students successfully`,
-      errors: errors.length > 0 ? errors : undefined,
-      successfulImports
+    res.json({ 
+      message: 'Students imported successfully', 
+      count: results.length,
+      students: results
     });
   } catch (error) {
     console.error('Error importing students:', error);
-    res.status(500).json({ 
-      message: 'Error importing students', 
-      error: error.message 
-    });
+    res.status(500).json({ message: 'Error importing students' });
   }
 });
 
-// Get all students
+// Get students for faculty
 router.get('/students', auth, isFaculty, async (req, res) => {
   try {
-    const students = await User.find({ role: 'student' })
-      .select('name email regNumber')
-      .sort('name');
+    console.log('Fetching students for faculty:', req.user.id); // Debug log
+    
+    const students = await User.find({ 
+      addedBy: req.user.id,
+      role: 'student' 
+    })
+    .select('-password')
+    .sort({ name: 1 });
+
+    console.log(`Found ${students.length} students`); // Debug log
     res.json(students);
   } catch (error) {
     console.error('Error fetching students:', error);
@@ -634,65 +629,57 @@ router.get('/students', auth, isFaculty, async (req, res) => {
   }
 });
 
-// Add single student manually
+// Add student
 router.post('/students', auth, isFaculty, async (req, res) => {
   try {
     const { name, email, regNumber } = req.body;
+    console.log('Adding student:', { name, email, regNumber }); // Debug log
 
-    // Validate required fields
-    if (!name || !email || !regNumber) {
-      return res.status(400).json({ message: 'All fields are required' });
-    }
-
-    // Check if user exists
-    const existingUser = await User.findOne({ 
-      $or: [{ email: email.toLowerCase() }, { regNumber }] 
-    });
-    
-    if (existingUser) {
+    // Check if student already exists
+    const existingStudent = await User.findOne({ email });
+    if (existingStudent) {
       return res.status(400).json({ 
-        message: 'User with this email or registration number already exists' 
+        message: 'A user with this email already exists' 
       });
     }
 
-    // Create new student with registration number as password
+    // Generate initial password
+    const initialPassword = regNumber || 'user01';
+    
+    // Hash the password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(initialPassword, salt);
+
+    // Create new student
     const student = new User({
       name,
-      email: email.toLowerCase(),
+      email,
       regNumber,
-      password: regNumber, // Let the pre-save middleware handle hashing
+      password: hashedPassword,
       role: 'student',
-      isVerified: true
+      addedBy: req.user.id
     });
 
     await student.save();
-    console.log('Student created successfully:', {
-      email,
-      regNumber
-    });
-    
-    // Send welcome email
-    try {
-      await sendWelcomeEmail({
-        name,
-        email: email.toLowerCase(),
-        regNumber,
-        password: regNumber,
-        loginUrl: process.env.FRONTEND_URL || 'http://localhost:5173'
-      });
-    } catch (emailError) {
-      console.error('Failed to send welcome email:', emailError);
-    }
 
-    res.status(201).json({
-      message: 'Student added successfully',
+    // Log success
+    console.log('Student created successfully:', {
+      id: student._id,
+      email: student.email,
+      regNumber: student.regNumber
+    });
+
+    res.status(201).json({ 
+      message: `Student added successfully. Initial password: ${initialPassword}`,
       student: {
-        _id: student._id,
+        id: student._id,
         name: student.name,
         email: student.email,
-        regNumber: student.regNumber
+        regNumber: student.regNumber,
+        initialPassword
       }
     });
+
   } catch (error) {
     console.error('Error adding student:', error);
     res.status(500).json({ message: 'Error adding student' });
@@ -781,6 +768,326 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
       message: 'Error uploading file',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+});
+
+// Get faculty dashboard stats
+router.get('/dashboard', auth, isFaculty, async (req, res) => {
+  try {
+    const facultyId = req.user.id;
+
+    const [
+      studentCount,
+      problems,
+      contests,
+      assignments,
+      submissions
+    ] = await Promise.all([
+      User.countDocuments({ 
+        addedBy: facultyId, 
+        role: 'student' 
+      }),
+      Problem.find({ createdBy: facultyId })
+        .sort('-createdAt')
+        .limit(5),
+      Contest.find({ createdBy: facultyId })
+        .sort('-createdAt')
+        .limit(5),
+      Assignment.find({ createdBy: facultyId })
+        .sort('-createdAt')
+        .limit(5),
+      Submission.find({ 
+        userId: { 
+          $in: await User.find({ 
+            addedBy: facultyId,
+            role: 'student' 
+          }).distinct('_id') 
+        }
+      })
+      .sort('-createdAt')
+      .limit(10)
+      .populate('userId', 'name')
+      .populate('problemId', 'title')
+    ]);
+
+    // Calculate active contests
+    const activeContests = contests.filter(contest => {
+      const now = new Date();
+      return now >= contest.startTime && now <= contest.endTime;
+    });
+
+    // Calculate success rate
+    const totalSubmissions = await Submission.countDocuments({
+      userId: { 
+        $in: await User.find({ 
+          addedBy: facultyId,
+          role: 'student' 
+        }).distinct('_id') 
+      }
+    });
+    
+    const successfulSubmissions = await Submission.countDocuments({
+      userId: { 
+        $in: await User.find({ 
+          addedBy: facultyId,
+          role: 'student' 
+        }).distinct('_id') 
+      },
+      status: 'Accepted'
+    });
+
+    const successRate = totalSubmissions > 0 
+      ? ((successfulSubmissions / totalSubmissions) * 100).toFixed(1)
+      : 0;
+
+    res.json({
+      stats: {
+        studentCount,
+        problemCount: await Problem.countDocuments({ createdBy: facultyId }),
+        contestCount: contests.length,
+        activeContestCount: activeContests.length,
+        submissionCount: totalSubmissions,
+        successRate: `${successRate}%`
+      },
+      recentActivity: {
+        problems,
+        contests,
+        assignments,
+        submissions
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard:', error);
+    res.status(500).json({ message: 'Error fetching dashboard data' });
+  }
+});
+
+// Get submissions
+router.get('/submissions', auth, isFaculty, async (req, res) => {
+  try {
+    // Get all students added by this faculty
+    const studentIds = await User.find({ 
+      addedBy: req.user.id,
+      role: 'student' 
+    }).distinct('_id');
+
+    // Get submissions from these students only
+    const submissions = await Submission.find({
+      userId: { $in: studentIds },
+      problemId: { 
+        $in: await Problem.find({ createdBy: req.user.id }).distinct('_id')
+      }
+    })
+    .populate('userId', 'name email')
+    .populate('problemId', 'title')
+    .sort('-submittedAt');
+
+    res.json(submissions);
+  } catch (error) {
+    console.error('Error fetching submissions:', error);
+    res.status(500).json({ message: 'Error fetching submissions' });
+  }
+});
+
+// Get submission statistics
+router.get('/submissions/stats', auth, isFaculty, async (req, res) => {
+  try {
+    const studentIds = await User.find({ 
+      addedBy: req.user.id,
+      role: 'student' 
+    }).distinct('_id');
+
+    const problemIds = await Problem.find({ 
+      createdBy: req.user.id 
+    }).distinct('_id');
+
+    const stats = await Submission.aggregate([
+      {
+        $match: {
+          userId: { $in: studentIds },
+          problemId: { $in: problemIds }
+        }
+      },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    res.json(stats);
+  } catch (error) {
+    console.error('Error fetching submission stats:', error);
+    res.status(500).json({ message: 'Error fetching submission statistics' });
+  }
+});
+
+// Get recent submissions
+router.get('/submissions/recent', auth, isFaculty, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 5;
+    
+    // Get students added by this faculty
+    const studentIds = await User.find({ 
+      addedBy: req.user.id,
+      role: 'student' 
+    }).distinct('_id');
+
+    // Get problems created by this faculty
+    const problemIds = await Problem.find({ 
+      createdBy: req.user.id 
+    }).distinct('_id');
+
+    const submissions = await Submission.find({
+      userId: { $in: studentIds },
+      problemId: { $in: problemIds }
+    })
+    .populate('userId', 'name')
+    .populate('problemId', 'title')
+    .sort('-submittedAt')
+    .limit(limit);
+
+    res.json(submissions);
+  } catch (error) {
+    console.error('Error fetching recent submissions:', error);
+    res.status(500).json({ message: 'Error fetching submissions' });
+  }
+});
+
+// Get submission stats
+router.get('/submissions/stats', auth, isFaculty, async (req, res) => {
+  try {
+    // Get students added by this faculty
+    const studentIds = await User.find({ 
+      addedBy: req.user.id,
+      role: 'student' 
+    }).distinct('_id');
+
+    // Get problems created by this faculty
+    const problemIds = await Problem.find({ 
+      createdBy: req.user.id 
+    }).distinct('_id');
+
+    const stats = await Submission.aggregate([
+      {
+        $match: {
+          userId: { $in: studentIds },
+          problemId: { $in: problemIds }
+        }
+      },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    res.json(stats);
+  } catch (error) {
+    console.error('Error fetching submission stats:', error);
+    res.status(500).json({ message: 'Error fetching submission statistics' });
+  }
+});
+
+// Get single contest
+router.get('/contests/:id', auth, isFaculty, async (req, res) => {
+  try {
+    const contest = await Contest.findOne({
+      _id: req.params.id,
+      createdBy: req.user.id
+    }).populate('problems.problem');
+    
+    if (!contest) {
+      return res.status(404).json({ message: 'Contest not found' });
+    }
+    
+    res.json(contest);
+  } catch (error) {
+    console.error('Error fetching contest:', error);
+    res.status(500).json({ message: 'Error fetching contest' });
+  }
+});
+
+// Get single assignment
+router.get('/assignments/:id', auth, isFaculty, checkOwnership(Assignment), async (req, res) => {
+  res.json(req.document);
+});
+
+// Get single problem
+router.get('/problems/:id', auth, isFaculty, checkOwnership(Problem), async (req, res) => {
+  res.json(req.document);
+});
+
+// Reset student password
+router.post('/students/:id/reset-password', auth, isFaculty, async (req, res) => {
+  try {
+    const student = await User.findOne({
+      _id: req.params.id,
+      role: 'student',
+      addedBy: req.user.id
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    // Reset password to regNumber or 'user01'
+    const newPassword = student.regNumber || 'user01';
+    student.password = newPassword;
+    await student.save();
+
+    res.json({ 
+      message: 'Password reset successfully',
+      initialPassword: newPassword
+    });
+  } catch (error) {
+    console.error('Error resetting password:', error);
+    res.status(500).json({ message: 'Error resetting password' });
+  }
+});
+
+// Get assignments created by faculty
+router.get('/assignments', auth, async (req, res) => {
+  try {
+    const assignments = await Assignment.find({ createdBy: req.user.id })
+      .sort('-createdAt')
+      .populate('problems', 'title difficulty')
+      .select('title dueDate status problems createdAt');
+
+    const formattedAssignments = assignments.map(assignment => ({
+      id: assignment._id,
+      title: assignment.title,
+      dueDate: assignment.dueDate,
+      status: new Date() > new Date(assignment.dueDate) ? 'Expired' : 'Active',
+      problems: assignment.problems.length,
+      createdAt: assignment.createdAt
+    }));
+
+    res.json(formattedAssignments);
+  } catch (error) {
+    console.error('Error fetching faculty assignments:', error);
+    res.status(500).json({ message: 'Error fetching assignments' });
+  }
+});
+
+// Get assignment by ID
+router.get('/assignments/:id', auth, isFaculty, async (req, res) => {
+  try {
+    const assignment = await Assignment.findOne({
+      _id: req.params.id,
+      createdBy: req.user.id
+    }).populate('problems');
+    
+    if (!assignment) {
+      return res.status(404).json({ message: 'Assignment not found' });
+    }
+    
+    res.json(assignment);
+  } catch (error) {
+    console.error('Error fetching assignment:', error);
+    res.status(500).json({ message: 'Error fetching assignment' });
   }
 });
 
