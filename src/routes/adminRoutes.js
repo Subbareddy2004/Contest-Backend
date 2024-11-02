@@ -426,4 +426,78 @@ router.get('/faculty-students', auth, isAdmin, async (req, res) => {
   }
 });
 
+// Add this route after the faculty routes
+router.delete('/faculty/:id', auth, isAdmin, async (req, res) => {
+  try {
+    const faculty = await User.findById(req.params.id);
+    
+    if (!faculty) {
+      return res.status(404).json({ message: 'Faculty not found' });
+    }
+
+    if (faculty.role !== 'faculty') {
+      return res.status(400).json({ message: 'User is not a faculty member' });
+    }
+
+    // Delete the faculty member
+    await User.findByIdAndDelete(req.params.id);
+
+    res.json({ message: 'Faculty deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting faculty:', error);
+    res.status(500).json({ message: 'Error deleting faculty' });
+  }
+});
+
+// Add this route for updating faculty details
+router.put('/faculty/:id', auth, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, email, password } = req.body;
+
+    // Find faculty and verify they exist
+    const faculty = await User.findById(id);
+    if (!faculty) {
+      return res.status(404).json({ message: 'Faculty not found' });
+    }
+
+    if (faculty.role !== 'faculty') {
+      return res.status(400).json({ message: 'User is not a faculty member' });
+    }
+
+    // Check if email is being changed and if it's already in use
+    if (email !== faculty.email) {
+      const existingUser = await User.findOne({ email });
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email already in use' });
+      }
+    }
+
+    // Prepare update object
+    const updateData = { name, email };
+    
+    // Only hash and update password if one is provided
+    if (password) {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      updateData.password = hashedPassword;
+    }
+
+    // Update faculty details
+    const updatedFaculty = await User.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, select: '-password' } // Return updated document without password
+    );
+
+    res.json({
+      message: 'Faculty updated successfully',
+      faculty: updatedFaculty
+    });
+
+  } catch (error) {
+    console.error('Error updating faculty:', error);
+    res.status(500).json({ message: 'Error updating faculty' });
+  }
+});
+
 module.exports = router; 
