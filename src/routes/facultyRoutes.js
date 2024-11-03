@@ -192,10 +192,35 @@ router.get('/assignments', auth, isFaculty, async (req, res) => {
 // Create new assignment
 router.post('/assignments', auth, isFaculty, async (req, res) => {
   try {
+    const { title, description, class: className, dueDate, problems } = req.body;
+
+    // Validate problems array
+    if (!Array.isArray(problems) || problems.length === 0) {
+      return res.status(400).json({ message: 'At least one problem is required' });
+    }
+
+    // Format problems with required fields
+    const formattedProblems = problems.map(problem => ({
+      title: problem.title,
+      description: problem.description,
+      points: problem.points || 10,
+      language: problem.language || 'python',
+      testCases: (problem.testCases || []).map(tc => ({
+        input: tc.input,
+        expectedOutput: tc.expectedOutput,
+        isHidden: tc.isHidden || false
+      }))
+    }));
+
     const assignment = new Assignment({
-      ...req.body,
+      title,
+      description,
+      class: className,
+      dueDate,
+      problems: formattedProblems,
       createdBy: req.user.id
     });
+
     await assignment.save();
     res.status(201).json(assignment);
   } catch (error) {
@@ -1088,6 +1113,312 @@ router.get('/assignments/:id', auth, isFaculty, async (req, res) => {
   } catch (error) {
     console.error('Error fetching assignment:', error);
     res.status(500).json({ message: 'Error fetching assignment' });
+  }
+});
+
+// Add these new routes
+router.get('/submission-stats', auth, async (req, res) => {
+  try {
+    const stats = await Assignment.aggregate([
+      {
+        $unwind: '$submissions'
+      },
+      {
+        $group: {
+          _id: '$submissions.status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    res.json(stats);
+  } catch (error) {
+    console.error('Error fetching submission stats:', error);
+    res.status(500).json({ message: 'Error fetching submission stats' });
+  }
+});
+
+router.get('/problem-difficulty-stats', auth, async (req, res) => {
+  try {
+    const stats = await Problem.aggregate([
+      {
+        $group: {
+          _id: '$difficulty',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    res.json(stats);
+  } catch (error) {
+    console.error('Error fetching difficulty stats:', error);
+    res.status(500).json({ message: 'Error fetching difficulty stats' });
+  }
+});
+
+router.get('/recent-submissions', auth, async (req, res) => {
+  try {
+    const recentSubmissions = await Assignment.aggregate([
+      { $unwind: '$submissions' },
+      { $sort: { 'submissions.submittedAt': -1 } },
+      { $limit: 10 },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'submissions.student',
+          foreignField: '_id',
+          as: 'studentInfo'
+        }
+      },
+      {
+        $project: {
+          'submissions.status': 1,
+          'submissions.submittedAt': 1,
+          'title': 1,
+          'studentInfo.name': 1
+        }
+      }
+    ]);
+    
+    res.json(recentSubmissions);
+  } catch (error) {
+    console.error('Error fetching recent submissions:', error);
+    res.status(500).json({ message: 'Error fetching recent submissions' });
+  }
+});
+
+// Get assignment submissions (faculty view)
+router.get('/assignments/:id/submissions', auth, isFaculty, async (req, res) => {
+  try {
+    console.log('Fetching submissions for assignment:', req.params.id);
+    
+    // Get the assignment with its problems
+    const assignment = await Assignment.findOne({
+      _id: req.params.id,
+      createdBy: req.user._id
+    })
+    .populate('problems')
+    .lean();
+
+    if (!assignment) {
+      return res.status(404).json({ message: 'Assignment not found' });
+    }
+
+    console.log('Assignment problems:', assignment.problems.length);
+
+    // Get all students in the class
+    const students = await User.find({
+      addedBy: req.user._id,
+      role: 'student',
+      class: assignment.class
+    }).select('name email regNumber').lean();
+
+    console.log('Found students:', students.length);
+
+    // Get all submissions for this assignment
+    const submissions = await Submission.find({
+      assignment: assignment._id,
+    })
+    .populate('problemId')
+    .lean();
+
+    console.log('Found submissions:', submissions.length);
+
+    // Create a map to track student progress
+    const studentProgress = new Map();
+
+    // Initialize progress for all students
+    students.forEach(student => {
+      studentProgress.set(student._id.toString(), {
+        student: {
+          _id: student._id,
+          name: student.name,
+          email: student.email,
+          regNumber: student.regNumber
+        },
+        problemsSolved: new Set(),
+        lastSubmission: null,
+        status: 'NOT_STARTED',
+        totalPoints: 0
+      });
+    });
+
+    // Process all submissions
+    submissions.forEach(submission => {
+      const studentId = submission.student.toString();
+      const progress = studentProgress.get(studentId);
+      
+      if (progress) {
+        // Update last submission time
+        const submissionTime = new Date(submission.submittedAt);
+        if (!progress.lastSubmission || submissionTime > new Date(progress.lastSubmission)) {
+          progress.lastSubmission = submission.submittedAt;
+        }
+
+        // Track passed problems
+        if (submission.status === 'PASSED') {
+          progress.problemsSolved.add(submission.problemId.toString());
+        }
+      }
+    });
+
+    // Update final status and points for each student
+    studentProgress.forEach(progress => {
+      const problemsCompleted = progress.problemsSolved.size;
+      const totalProblems = assignment.problems.length;
+
+      // Update status
+      if (problemsCompleted === 0) {
+        progress.status = 'NOT_STARTED';
+      } else if (problemsCompleted === totalProblems) {
+        progress.status = 'COMPLETED';
+      } else {
+        progress.status = 'IN_PROGRESS';
+      }
+
+      // Calculate points (10 points per problem)
+      progress.totalPoints = problemsCompleted * 10;
+    });
+
+    // Convert to array and format for response
+    const submissionsList = Array.from(studentProgress.values())
+      .map(progress => ({
+        student: progress.student,
+        status: progress.status,
+        problemsCompleted: `${progress.problemsSolved.size} / ${assignment.problems.length}`,
+        lastSubmission: progress.lastSubmission 
+          ? new Date(progress.lastSubmission).toLocaleString()
+          : 'Not submitted',
+        score: assignment.problems.length > 0 
+          ? Math.round((progress.problemsSolved.size / assignment.problems.length) * 100)
+          : 0
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    console.log('Final submissions list:', submissionsList.map(s => ({
+      student: s.student.email,
+      problemsCompleted: s.problemsCompleted,
+      status: s.status,
+      score: s.score
+    })));
+
+    res.json(submissionsList);
+
+  } catch (error) {
+    console.error('Error fetching assignment submissions:', error);
+    res.status(500).json({ message: 'Error fetching submissions' });
+  }
+});
+
+// Get top students for faculty dashboard
+router.get('/top-students', auth, isFaculty, async (req, res) => {
+  try {
+    const students = await User.find({ 
+      addedBy: req.user._id,
+      role: 'student'
+    }).lean();
+
+    const submissions = await Submission.find({
+      student: { $in: students.map(s => s._id) }
+    }).lean();
+
+    // Calculate student scores
+    const studentStats = students.map(student => {
+      const studentSubmissions = submissions.filter(s => s.student.toString() === student._id.toString());
+      const problemsSolved = new Set(studentSubmissions.filter(s => s.status === 'PASSED').map(s => s.problemId)).size;
+      const score = Math.round((problemsSolved / (studentSubmissions.length || 1)) * 100);
+      
+      return {
+        _id: student._id,
+        name: student.name,
+        email: student.email,
+        problemsSolved,
+        score
+      };
+    });
+
+    // Sort by score and problems solved
+    const sortedStats = studentStats.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.problemsSolved - a.problemsSolved;
+    });
+
+    res.json(sortedStats);
+  } catch (error) {
+    console.error('Error fetching top students:', error);
+    res.status(500).json({ message: 'Error fetching top students' });
+  }
+});
+
+// Get faculty leaderboard
+router.get('/leaderboard', auth, isFaculty, async (req, res) => {
+  try {
+    // Get all students under this faculty
+    const students = await User.find({
+      addedBy: req.user.id,
+      role: 'student'
+    }).select('name email');
+
+    if (!students || students.length === 0) {
+      return res.json([]); 
+    }
+
+    // Get all submissions for these students
+    const leaderboardData = await Promise.all(
+      students.map(async (student) => {
+        try {
+          // Get all PASSED submissions for this student
+          const submissions = await Submission.find({
+            student: student._id,
+            status: 'PASSED'
+          });
+
+          // Count unique problems solved using Set
+          const uniqueProblemsSolved = new Set(
+            submissions.map(sub => sub.problemId.toString())
+          ).size;
+
+          // Count completed assignments
+          const completedAssignments = await Assignment.countDocuments({
+            'submissions.student': student._id,
+            'submissions.status': 'PASSED'
+          });
+
+          // Calculate total points (10 points per problem, 20 points per assignment)
+          const totalPoints = (uniqueProblemsSolved * 10) + (completedAssignments * 20);
+
+          return {
+            student: {
+              _id: student._id,
+              name: student.name,
+              email: student.email
+            },
+            problemsSolved: uniqueProblemsSolved,
+            totalPoints
+          };
+        } catch (error) {
+          console.error(`Error processing student ${student._id}:`, error);
+          return null;
+        }
+      })
+    );
+
+    // Filter out any null entries and sort by total points
+    const sortedLeaderboard = leaderboardData
+      .filter(entry => entry !== null)
+      .sort((a, b) => b.totalPoints - a.totalPoints)
+      .map((entry, index) => ({
+        ...entry,
+        rank: index + 1
+      }));
+
+    res.json(sortedLeaderboard);
+  } catch (error) {
+    console.error('Error fetching leaderboard:', error);
+    res.status(500).json({ 
+      message: 'Error fetching leaderboard',
+      error: error.message 
+    });
   }
 });
 

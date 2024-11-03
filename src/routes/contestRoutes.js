@@ -72,46 +72,50 @@ router.get('/:id', auth, async (req, res) => {
 // Join contest route
 router.post('/:id/join', auth, async (req, res) => {
   try {
-    const contest = await Contest.findById(req.params.id);
-    
+    const contestId = req.params.id;
+    const userId = req.user.id;
+
+    // Find the contest
+    const contest = await Contest.findById(contestId);
     if (!contest) {
       return res.status(404).json({ message: 'Contest not found' });
     }
 
-    // Check if user already joined
-    const alreadyJoined = contest.participants.some(
-      participant => participant.user.toString() === req.user.id
-    );
-
-    if (alreadyJoined) {
-      return res.status(400).json({ message: 'Already joined this contest' });
+    // Check if user is already registered
+    if (contest.participants && contest.participants.some(participant => participant.toString() === userId)) {
+      return res.status(400).json({ message: 'You are already registered for this contest' });
     }
 
-    // Check if contest has started
-    const now = new Date();
+    // Get current time
+    const currentTime = new Date();
     const startTime = new Date(contest.startTime);
-    const endTime = new Date(startTime.getTime() + contest.duration * 60000);
+    const endTime = new Date(contest.endTime);
 
-    if (now > endTime) {
+    // Allow registration before contest starts
+    if (currentTime > endTime) {
       return res.status(400).json({ message: 'Contest has already ended' });
     }
 
     // Add user to participants
-    const newParticipant = {
-      user: req.user.id,
-      joinedAt: new Date(),
-      submissions: []
-    };
-
-    contest.participants.push(newParticipant);
+    if (!contest.participants) {
+      contest.participants = [];
+    }
+    contest.participants.push(userId);
     await contest.save();
 
-    res.json({ 
-      message: 'Successfully joined contest',
-      contestId: contest._id,
-      startTime: contest.startTime,
-      duration: contest.duration
-    });
+    // Return different messages based on contest timing
+    if (currentTime < startTime) {
+      return res.json({ 
+        message: 'Successfully registered for the contest',
+        startTime: startTime,
+        status: 'REGISTERED'
+      });
+    } else {
+      return res.json({ 
+        message: 'Successfully joined the contest',
+        status: 'JOINED'
+      });
+    }
 
   } catch (error) {
     console.error('Error joining contest:', error);

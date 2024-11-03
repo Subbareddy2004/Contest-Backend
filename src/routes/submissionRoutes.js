@@ -8,7 +8,20 @@ const User = require('../models/User');
 // Get submission statistics
 router.get('/stats', auth, isFaculty, async (req, res) => {
   try {
+    // Get all students under this faculty
+    const students = await User.find({
+      addedBy: req.user.id,
+      role: 'student'
+    }).select('_id');
+
+    const studentIds = students.map(s => s._id);
+
     const stats = await Submission.aggregate([
+      {
+        $match: {
+          student: { $in: studentIds }
+        }
+      },
       {
         $group: {
           _id: '$status',
@@ -17,11 +30,14 @@ router.get('/stats', auth, isFaculty, async (req, res) => {
       }
     ]);
 
-    res.json(stats.map(stat => ({
+    const formattedStats = stats.map(stat => ({
       status: stat._id,
       count: stat.count
-    })));
+    }));
+
+    res.json(formattedStats);
   } catch (error) {
+    console.error('Error fetching submission statistics:', error);
     res.status(500).json({ message: 'Error fetching submission statistics' });
   }
 });

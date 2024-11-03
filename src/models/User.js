@@ -24,11 +24,15 @@ const userSchema = new mongoose.Schema({
     type: String,
     sparse: true
   },
+  class: {
+    type: String,
+    sparse: true
+  },
   addedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: function() {
-      return this.role === 'student';
+      return this.role === 'student' || this.role === 'faculty';
     }
   },
   createdAt: {

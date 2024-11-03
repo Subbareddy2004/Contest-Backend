@@ -352,82 +352,108 @@ router.get('/problems', auth, async (req, res) => {
 // Add this route for student dashboard data
 router.get('/dashboard', auth, async (req, res) => {
   try {
+    // Get the faculty who added this student
     const student = await User.findById(req.user.id).populate('addedBy');
-    if (!student || !student.addedBy) {
-      return res.status(404).json({ message: 'Student or faculty not found' });
-    }
-
-    // Get stats
-    const problemsSolved = await Submission.countDocuments({
-      student: student._id,
-      status: 'Accepted'
+    
+    // Get assignments only from the faculty who added the student
+    const assignments = await Assignment.find({ 
+      class: req.user.class,
+      createdBy: student.addedBy._id
+    }).lean();
+    
+    // Calculate stats as before
+    let problemsSolved = 0;
+    let completedAssignments = 0;
+    
+    assignments.forEach(assignment => {
+      const solvedProblems = new Set(
+        assignment.submissions
+          ?.filter(sub => 
+            sub.student.toString() === req.user.id && 
+            sub.status === 'PASSED'
+          )
+          .map(sub => sub.problemId.toString())
+      );
+      
+      problemsSolved += solvedProblems.size;
+      if (solvedProblems.size === assignment.problems.length) {
+        completedAssignments++;
+      }
     });
 
-    const completedAssignments = await Assignment.countDocuments({
-      'submissions.student': student._id,
-      'submissions.status': 'Completed'
-    });
-
-    // Get leaderboard rank
-    const leaderboardRank = await calculateLeaderboardRank(student._id);
-
-    // Get recent problems from faculty
-    const recentProblems = await Problem.find({ createdBy: student.addedBy._id })
-      .sort('-createdAt')
-      .limit(3)
-      .select('title difficulty _id');
-
-    // Get upcoming assignments from faculty - Fixed date comparison and sorting
+    // Get upcoming assignments from the same faculty
     const upcomingAssignments = await Assignment.find({
+      class: req.user.class,
       createdBy: student.addedBy._id,
-      dueDate: { $gt: new Date() }  // Only future assignments
+      dueDate: { $gt: new Date() }
     })
-      .sort('dueDate')  // Sort by nearest date first
-      .limit(3)         // Get top 3
-      .select('title dueDate _id');
+    .sort('dueDate')
+    .limit(5)
+    .select('title dueDate')
+    .lean();
 
-    // Get upcoming contests from faculty - Fixed field name from startDate to startTime
-    const upcomingContests = await Contest.find({
-      createdBy: student.addedBy._id,
-      startTime: { $gt: new Date() }  // Changed from startDate to startTime
+    // Get recent problems
+    const recentProblems = await Problem.find({
+      class: req.user.class
     })
-      .sort('startTime')  // Changed from startDate to startTime
-      .limit(3)
-      .select('title startTime _id');  // Changed from startDate to startTime
+    .sort('-createdAt')
+    .limit(5)
+    .select('title')
+    .lean();
+
+    // Get upcoming contests
+    const upcomingContests = await Contest.find({
+      class: req.user.class,
+      startTime: { $gt: new Date() }
+    })
+    .sort('startTime')
+    .limit(5)
+    .select('title startTime')
+    .lean();
 
     res.json({
-      stats: {
-        problemsSolved: problemsSolved || 0,
-        leaderboardRank: leaderboardRank || 'N/A',
-        completedAssignments: completedAssignments || 0
-      },
-      recentProblems: recentProblems.map(p => ({
-        id: p._id,
-        name: p.title,
-        difficulty: p.difficulty
-      })),
-      upcomingAssignments: upcomingAssignments.map(a => ({
-        id: a._id,
-        name: a.title,
-        date: new Date(a.dueDate).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit'
-        })
-      })),
-      upcomingContests: upcomingContests.map(c => ({
-        id: c._id,
-        name: c.title || c.name,  // Added fallback to name field
-        date: new Date(c.startTime).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit'
-        })
-      }))
+      problemsSolved,
+      completedAssignments,
+      upcomingAssignments,
+      recentProblems,
+      upcomingContests
     });
   } catch (error) {
     console.error('Error fetching dashboard data:', error);
     res.status(500).json({ message: 'Error fetching dashboard data' });
+  }
+});
+
+// Add this to your student routes where submissions are handled
+router.post('/assignments/:assignmentId/problems/:problemId/submit', auth, async (req, res) => {
+  try {
+    // Verify the assignment exists and student has access
+    const assignment = await Assignment.findOne({
+      _id: req.params.assignmentId,
+      'problems': req.params.problemId
+    });
+
+    if (!assignment) {
+      return res.status(404).json({ message: 'Assignment or problem not found' });
+    }
+
+    // Create and save the submission
+    const submission = new Submission({
+      student: req.user._id,
+      assignment: req.params.assignmentId,
+      problemId: req.params.problemId,
+      code: req.body.code,
+      language: req.body.language,
+      status: req.body.status, // 'PASSED' or 'FAILED'
+      submittedAt: new Date()
+    });
+
+    await submission.save();
+    
+    res.json(submission);
+  } catch (error) {
+    console.error('Error submitting solution:', error);
+    res.status(500).json({ message: 'Error submitting solution' });
   }
 });
 

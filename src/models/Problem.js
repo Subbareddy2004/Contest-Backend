@@ -1,5 +1,20 @@
 const mongoose = require('mongoose');
 
+const testCaseSchema = new mongoose.Schema({
+  input: {
+    type: String,
+    required: true
+  },
+  output: {
+    type: String,
+    required: true
+  },
+  isHidden: {
+    type: Boolean,
+    default: false
+  }
+});
+
 const problemSchema = new mongoose.Schema({
   title: {
     type: String,
@@ -10,44 +25,21 @@ const problemSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  difficulty: {
+  testCases: [testCaseSchema],
+  points: {
+    type: Number,
+    default: 10
+  },
+  language: {
     type: String,
-    enum: ['Easy', 'Medium', 'Hard'],
-    required: true
+    enum: ['python', 'javascript', 'java', 'cpp'],
+    default: 'python'
   },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
-  },
-  testCases: [{
-    input: String,
-    output: String,
-    isHidden: {
-      type: Boolean,
-      default: false
-    }
-  }],
-  constraints: [String],
-  sampleInput: String,
-  sampleOutput: String,
-  timeLimit: {
-    type: Number,
-    default: 1000 // milliseconds
-  },
-  memoryLimit: {
-    type: Number,
-    default: 256 // MB
-  },
-  tags: {
-    type: [String],
-    default: []
   }
-}, {
-  timestamps: true
 });
-
-// Add index for better query performance
-problemSchema.index({ createdBy: 1 });
 
 module.exports = mongoose.model('Problem', problemSchema);

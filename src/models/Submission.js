@@ -6,48 +6,26 @@ const submissionSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  contest: {
+  assignment: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Contest',
+    ref: 'Assignment',
     required: true
   },
-  problem: {
+  problemId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Problem',
     required: true
   },
-  code: {
-    type: String,
-    required: true
-  },
-  language: {
-    type: String,
-    required: true
-  },
+  code: String,
+  language: String,
   status: {
     type: String,
-    enum: ['Pending', 'Accepted', 'Wrong Answer', 'Time Limit Exceeded', 'Runtime Error'],
-    default: 'Pending'
+    enum: ['PASSED', 'FAILED', 'IN_PROGRESS'],
+    required: true
   },
-  points: {
-    type: Number,
-    default: 0
-  },
-  executionTime: {
-    type: Number,
-    default: 0
-  },
-  memoryUsed: {
-    type: Number,
-    default: 0
-  },
-  errorMessage: String,
   submittedAt: {
     type: Date,
     default: Date.now
   }
-}, {
-  timestamps: true
 });
 
 module.exports = mongoose.model('Submission', submissionSchema);
