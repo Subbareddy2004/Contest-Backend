@@ -58,7 +58,7 @@ app.use('/api/assignments', assignmentRoutes);
 app.use('/api/submissions', submissionRoutes);
 app.use('/api/leaderboard', leaderboardRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/contests', contestRoutes);
+app.use('/api', contestRoutes);
 
 // MongoDB connection
 mongoose.connect(process.env.MONGODB_URI, {

@@ -1,8 +1,125 @@
 const express = require('express');
 const router = express.Router();
 const { auth } = require('../middleware/auth');
-const { isFaculty } = require('../middleware/faculty');
+const { isStudent } = require('../middleware/roleCheck');
+const { isFaculty } = require('../middleware/roleCheck');
 const Problem = require('../models/Problem');
+const axios = require('axios');
+
+// Student routes should come before generic routes
+// Get all problems for students
+router.get('/student/problems', auth, isStudent, async (req, res) => {
+  try {
+    console.log('Fetching problems for student');
+    const problems = await Problem.find()
+      .select('title description difficulty points')
+      .lean();
+    
+    console.log(`Found ${problems.length} problems`);
+    res.json(problems);
+  } catch (error) {
+    console.error('Error fetching problems:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get specific problem details for students
+router.get('/student/problems/:id', auth, isStudent, async (req, res) => {
+  try {
+    console.log(`Fetching problem with ID: ${req.params.id}`);
+    const problem = await Problem.findById(req.params.id)
+      .select('title description difficulty points sampleInput sampleOutput testCases template language')
+      .lean();
+
+    if (!problem) {
+      console.log('Problem not found');
+      return res.status(404).json({ message: 'Problem not found' });
+    }
+
+    console.log('Problem found:', problem.title);
+    res.json(problem);
+  } catch (error) {
+    console.error('Error fetching problem:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Run code for a problem
+router.post('/student/problems/:id/run', auth, isStudent, async (req, res) => {
+  try {
+    const { code, language } = req.body;
+    
+    // Map language to Codex format
+    const codexLanguage = {
+      'cpp': 'cpp',
+      'python': 'py',
+      'java': 'java',
+      'c': 'c'
+    }[language];
+
+    if (!codexLanguage) {
+      return res.status(400).json({ message: 'Unsupported language' });
+    }
+
+    const problem = await Problem.findById(req.params.id)
+      .select('title description testCases');
+
+    if (!problem) {
+      return res.status(404).json({ message: 'Problem not found' });
+    }
+
+    if (!problem.testCases || problem.testCases.length === 0) {
+      return res.status(400).json({ message: 'No test cases found for this problem' });
+    }
+
+    // Run code against test cases using Codex API
+    const results = await Promise.all(problem.testCases.map(async (testCase) => {
+      try {
+        const response = await axios.post('https://api.codex.jaagrav.in', {
+          code,
+          language: codexLanguage,
+          input: testCase.input
+        });
+
+        const actualOutput = (response.data.output || '').trim();
+        const expectedOutput = (testCase.output || '').trim();
+        const passed = actualOutput === expectedOutput;
+        const error = response.data.error || '';
+
+        return {
+          passed,
+          input: testCase.isHidden ? 'Hidden' : testCase.input,
+          expected: testCase.isHidden ? 'Hidden' : expectedOutput,
+          actual: testCase.isHidden ? 'Hidden' : actualOutput,
+          error,
+          isHidden: testCase.isHidden || false
+        };
+      } catch (error) {
+        return {
+          passed: false,
+          error: error.message,
+          isHidden: testCase.isHidden || false
+        };
+      }
+    }));
+
+    const allPassed = results.every(r => r.passed);
+
+    res.json({
+      success: true,
+      results,
+      allPassed
+    });
+
+  } catch (error) {
+    console.error('Error running code:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to run code',
+      error: error.message
+    });
+  }
+});
 
 // Get recent problems
 router.get('/recent', auth, async (req, res) => {

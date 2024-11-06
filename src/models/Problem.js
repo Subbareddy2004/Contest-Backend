@@ -25,21 +25,35 @@ const problemSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  testCases: [testCaseSchema],
+  difficulty: {
+    type: String,
+    enum: ['Easy', 'Medium', 'Hard'],
+    required: true
+  },
   points: {
     type: Number,
     default: 10
   },
-  language: {
+  sampleInput: {
     type: String,
-    enum: ['python', 'javascript', 'java', 'cpp'],
-    default: 'python'
+    required: true
+  },
+  sampleOutput: {
+    type: String,
+    required: true
+  },
+  testCases: [testCaseSchema],
+  createdAt: {
+    type: Date,
+    default: Date.now
   },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
   }
+}, {
+  timestamps: true
 });
 
 module.exports = mongoose.model('Problem', problemSchema);
