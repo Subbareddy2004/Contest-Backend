@@ -12,6 +12,7 @@ const { sendWelcomeEmail } = require('../utils/emailService');
 const cloudinary = require('../config/cloudinary');
 const Submission = require('../models/Submission');
 const checkOwnership = require('../middleware/checkOwnership');
+const Contest = require('../models/Contest');
 
 // IMPORTANT: Replace the existing multer configuration with this one
 const upload = multer({
@@ -695,78 +696,69 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
 // Get faculty dashboard stats
 router.get('/dashboard', auth, isFaculty, async (req, res) => {
   try {
-    const facultyId = req.user.id;
-
-    const [
-      studentCount,
-      problems,
-      assignments,
-      submissions
-    ] = await Promise.all([
-      User.countDocuments({ 
-        addedBy: facultyId, 
-        role: 'student' 
-      }),
-      Problem.find({ createdBy: facultyId })
-        .sort('-createdAt')
-        .limit(5),
-      Assignment.find({ createdBy: facultyId })
-        .sort('-createdAt')
-        .limit(5),
-      Submission.find({ 
-        userId: { 
-          $in: await User.find({ 
-            addedBy: facultyId,
-            role: 'student' 
-          }).distinct('_id') 
+    const now = new Date();
+    
+    // Get contest statistics
+    const [contestCount, activeContestCount] = await Promise.all([
+      Contest.countDocuments({ createdBy: req.user.id }),
+      Contest.countDocuments({
+        createdBy: req.user.id,
+        startTime: { $lte: now },
+        $expr: {
+          $gt: [
+            { $add: ['$startTime', { $multiply: ['$duration', 60000] }] },
+            now
+          ]
         }
       })
-      .sort('-createdAt')
-      .limit(10)
-      .populate('userId', 'name')
-      .populate('problemId', 'title')
     ]);
 
-    // Calculate success rate
-    const totalSubmissions = await Submission.countDocuments({
-      userId: { 
-        $in: await User.find({ 
-          addedBy: facultyId,
-          role: 'student' 
-        }).distinct('_id') 
-      }
-    });
-    
-    const successfulSubmissions = await Submission.countDocuments({
-      userId: { 
-        $in: await User.find({ 
-          addedBy: facultyId,
-          role: 'student' 
-        }).distinct('_id') 
-      },
-      status: 'Accepted'
+    // Get submission statistics
+    const submissionCount = await Submission.countDocuments({
+      'contest.createdBy': req.user.id
     });
 
-    const successRate = totalSubmissions > 0 
-      ? ((successfulSubmissions / totalSubmissions) * 100).toFixed(1)
-      : 0;
+    // Get student count
+    const studentCount = await User.countDocuments({ role: 'student' });
+
+    // Get submission statistics by date
+    const submissionStats = await Submission.aggregate([
+      {
+        $match: {
+          'contest.createdBy': req.user.id,
+          createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+        }
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { _id: 1 }
+      },
+      {
+        $project: {
+          name: '$_id',
+          count: 1,
+          _id: 0
+        }
+      }
+    ]);
 
     res.json({
       stats: {
-        studentCount,
-        problemCount: await Problem.countDocuments({ createdBy: facultyId }),
-        submissionCount: totalSubmissions,
-        successRate: `${successRate}%`
+        contestCount,
+        activeContestCount,
+        submissionCount,
+        studentCount
       },
-      recentActivity: {
-        problems,
-        assignments,
-        submissions
-      }
+      submissionStats
     });
   } catch (error) {
-    console.error('Error fetching dashboard:', error);
-    res.status(500).json({ message: 'Error fetching dashboard data' });
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({ message: 'Error fetching dashboard statistics' });
   }
 });
 
@@ -1054,120 +1046,67 @@ router.get('/recent-submissions', auth, async (req, res) => {
 // Get assignment submissions (faculty view)
 router.get('/assignments/:id/submissions', auth, isFaculty, async (req, res) => {
   try {
-    console.log('Fetching submissions for assignment:', req.params.id);
+    const assignmentId = req.params.id;
+    const assignment = await Assignment.findById(assignmentId);
     
-    // Get the assignment with its problems
-    const assignment = await Assignment.findOne({
-      _id: req.params.id,
-      createdBy: req.user._id
-    })
-    .populate('problems')
-    .lean();
-
     if (!assignment) {
       return res.status(404).json({ message: 'Assignment not found' });
     }
 
-    console.log('Assignment problems:', assignment.problems.length);
-
-    // Get all students in the class
-    const students = await User.find({
-      addedBy: req.user._id,
-      role: 'student',
-      class: assignment.class
-    }).select('name email regNumber').lean();
-
-    console.log('Found students:', students.length);
-
     // Get all submissions for this assignment
-    const submissions = await Submission.find({
-      assignment: assignment._id,
-    })
-    .populate('problemId')
-    .lean();
-
-    console.log('Found submissions:', submissions.length);
-
-    // Create a map to track student progress
-    const studentProgress = new Map();
-
-    // Initialize progress for all students
-    students.forEach(student => {
-      studentProgress.set(student._id.toString(), {
-        student: {
-          _id: student._id,
-          name: student.name,
-          email: student.email,
-          regNumber: student.regNumber
-        },
-        problemsSolved: new Set(),
-        lastSubmission: null,
-        status: 'NOT_STARTED',
-        totalPoints: 0
-      });
-    });
-
-    // Process all submissions
-    submissions.forEach(submission => {
-      const studentId = submission.student.toString();
-      const progress = studentProgress.get(studentId);
-      
-      if (progress) {
-        // Update last submission time
-        const submissionTime = new Date(submission.submittedAt);
-        if (!progress.lastSubmission || submissionTime > new Date(progress.lastSubmission)) {
-          progress.lastSubmission = submission.submittedAt;
+    const submissions = await Submission.aggregate([
+      {
+        $match: { assignment: assignment._id }
+      },
+      {
+        $group: {
+          _id: '$student',
+          problemsCompleted: {
+            $sum: { $cond: [{ $eq: ['$status', 'PASSED'] }, 1, 0] }
+          },
+          lastSubmission: { $max: '$submittedAt' },
+          score: {
+            $avg: {
+              $cond: [
+                { $eq: ['$status', 'PASSED'] },
+                100,
+                0
+              ]
+            }
+          }
         }
-
-        // Track passed problems
-        if (submission.status === 'PASSED') {
-          progress.problemsSolved.add(submission.problemId.toString());
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'student'
+        }
+      },
+      {
+        $unwind: '$student'
+      },
+      {
+        $project: {
+          'student.name': 1,
+          'student.email': 1,
+          problemsCompleted: 1,
+          totalProblems: { $size: assignment.problems },
+          lastSubmission: 1,
+          score: { $round: ['$score', 0] },
+          status: {
+            $cond: {
+              if: { $gte: ['$score', assignment.passingScore || 70] },
+              then: 'PASSED',
+              else: 'IN_PROGRESS'
+            }
+          }
         }
       }
-    });
+    ]);
 
-    // Update final status and points for each student
-    studentProgress.forEach(progress => {
-      const problemsCompleted = progress.problemsSolved.size;
-      const totalProblems = assignment.problems.length;
-
-      // Update status
-      if (problemsCompleted === 0) {
-        progress.status = 'NOT_STARTED';
-      } else if (problemsCompleted === totalProblems) {
-        progress.status = 'COMPLETED';
-      } else {
-        progress.status = 'IN_PROGRESS';
-      }
-
-      // Calculate points (10 points per problem)
-      progress.totalPoints = problemsCompleted * 10;
-    });
-
-    // Convert to array and format for response
-    const submissionsList = Array.from(studentProgress.values())
-      .map(progress => ({
-        student: progress.student,
-        status: progress.status,
-        problemsCompleted: `${progress.problemsSolved.size} / ${assignment.problems.length}`,
-        lastSubmission: progress.lastSubmission 
-          ? new Date(progress.lastSubmission).toLocaleString()
-          : 'Not submitted',
-        score: assignment.problems.length > 0 
-          ? Math.round((progress.problemsSolved.size / assignment.problems.length) * 100)
-          : 0
-      }))
-      .sort((a, b) => b.score - a.score);
-
-    console.log('Final submissions list:', submissionsList.map(s => ({
-      student: s.student.email,
-      problemsCompleted: s.problemsCompleted,
-      status: s.status,
-      score: s.score
-    })));
-
-    res.json(submissionsList);
-
+    res.json(submissions);
   } catch (error) {
     console.error('Error fetching assignment submissions:', error);
     res.status(500).json({ message: 'Error fetching submissions' });
@@ -1283,6 +1222,66 @@ router.get('/leaderboard', auth, isFaculty, async (req, res) => {
       message: 'Error fetching leaderboard',
       error: error.message 
     });
+  }
+});
+
+// Update or add this route
+router.get('/assignments/:id/submissions', auth, isFaculty, async (req, res) => {
+  try {
+    const assignmentId = req.params.id;
+    
+    // First get the assignment to get total problems
+    const assignment = await Assignment.findById(assignmentId);
+    if (!assignment) {
+      return res.status(404).json({ message: 'Assignment not found' });
+    }
+
+    // Get all students assigned to this faculty
+    const students = await User.find({ 
+      addedBy: req.user._id,
+      role: 'student'
+    });
+
+    // Get submissions for all students
+    const submissions = await Promise.all(students.map(async (student) => {
+      // Get all submissions for this student and assignment
+      const studentSubmissions = await Submission.find({
+        student: student._id,
+        assignment: assignmentId
+      }).sort({ submittedAt: -1 });
+
+      // Calculate problems completed
+      const problemsCompleted = new Set(
+        studentSubmissions
+          .filter(sub => sub.status === 'PASSED')
+          .map(sub => sub.problemId.toString())
+      ).size;
+
+      // Calculate score
+      const score = (problemsCompleted / assignment.problems.length) * 100;
+
+      // Get last submission date
+      const lastSubmission = studentSubmissions.length > 0 
+        ? studentSubmissions[0].submittedAt 
+        : null;
+
+      return {
+        student: {
+          name: student.name,
+          email: student.email
+        },
+        status: score >= 70 ? 'PASSED' : 'IN_PROGRESS',
+        problemsCompleted,
+        totalProblems: assignment.problems.length,
+        lastSubmission,
+        score: Math.round(score)
+      };
+    }));
+
+    res.json(submissions);
+  } catch (error) {
+    console.error('Error fetching submissions:', error);
+    res.status(500).json({ message: 'Error fetching submissions' });
   }
 });
 

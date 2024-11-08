@@ -5,6 +5,7 @@ const User = require('../models/User');
 const Submission = require('../models/Submission');
 const Problem = require('../models/Problem');
 const Assignment = require('../models/Assignment');
+const Contest = require('../models/Contest');
 
 // Add this function at the top of the file
 const calculateLeaderboardRank = async (studentId) => {
@@ -291,63 +292,89 @@ router.get('/problems', auth, async (req, res) => {
 // Add this route for student dashboard data
 router.get('/dashboard', auth, async (req, res) => {
   try {
-    const student = await User.findById(req.user.id).populate('addedBy');
-    if (!student || !student.addedBy) {
-      return res.status(404).json({ message: 'Student or faculty not found' });
-    }
+    const userId = req.user.id;
+    const now = new Date();
 
-    // Get assignments and submissions in parallel
-    const [assignments, submissions] = await Promise.all([
-      Assignment.find({ 
-        createdBy: student.addedBy._id 
-      }).lean(),
-      Submission.find({
-        student: student._id,
-        status: 'PASSED'
-      }).distinct('problemId')
+    // Get contest statistics
+    const [activeContests, participatedContests] = await Promise.all([
+      Contest.countDocuments({
+        isPublished: true,
+        startTime: { $lte: now },
+        $expr: {
+          $gt: [
+            { $add: ['$startTime', { $multiply: ['$duration', 60000] }] },
+            now
+          ]
+        }
+      }),
+      Contest.countDocuments({
+        'participants.student': userId
+      })
     ]);
 
-    // Calculate statistics
-    const problemsSolved = submissions.length;
-    const completedAssignments = assignments.filter(assignment => {
-      const requiredProblems = new Set(assignment.problems.map(p => p.toString()));
-      const solvedProblems = new Set(submissions.map(s => s.toString()));
-      return [...requiredProblems].every(p => solvedProblems.has(p));
-    }).length;
+    // Get submission statistics
+    const submissionStats = await Submission.aggregate([
+      {
+        $match: {
+          'student': userId,
+          createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+        }
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+          count: { $sum: 1 },
+          passed: {
+            $sum: { $cond: [{ $eq: ['$status', 'PASSED'] }, 1, 0] }
+          }
+        }
+      },
+      {
+        $sort: { _id: 1 }
+      },
+      {
+        $project: {
+          name: '$_id',
+          submissions: '$count',
+          passed: 1,
+          _id: 0
+        }
+      }
+    ]);
 
-    // Get upcoming assignments
-    const upcomingAssignments = await Assignment.find({
-      createdBy: student.addedBy._id,
-      dueDate: { $gt: new Date() }
-    })
-    .sort('dueDate')
-    .limit(5)
-    .select('title dueDate')
-    .lean();
+    // Get total solved problems and success rate
+    const submissionSummary = await Submission.aggregate([
+      {
+        $match: { 'student': userId }
+      },
+      {
+        $group: {
+          _id: null,
+          totalSubmissions: { $sum: 1 },
+          passedSubmissions: {
+            $sum: { $cond: [{ $eq: ['$status', 'PASSED'] }, 1, 0] }
+          }
+        }
+      }
+    ]);
 
-    // Get recent problems
-    const recentProblems = await Problem.find({
-      _id: { $in: submissions }
-    })
-    .sort('-createdAt')
-    .limit(5)
-    .select('title difficulty')
-    .lean();
+    const summary = submissionSummary[0] || { totalSubmissions: 0, passedSubmissions: 0 };
+    const successRate = summary.totalSubmissions > 0 
+      ? (summary.passedSubmissions / summary.totalSubmissions * 100).toFixed(1)
+      : 0;
 
     res.json({
-      problemsSolved,
-      completedAssignments,
-      upcomingAssignments,
-      recentProblems,
-      student: {
-        name: student.name,
-        email: student.email,
-        regNumber: student.regNumber
-      }
+      stats: {
+        activeContests,
+        participatedContests,
+        totalSubmissions: summary.totalSubmissions,
+        successRate
+      },
+      submissionStats
     });
   } catch (error) {
-    console.error('Error fetching dashboard data:', error);
-    res.status(500).json({ message: 'Error fetching dashboard data' });
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({ message: 'Error fetching dashboard statistics' });
   }
 });
 

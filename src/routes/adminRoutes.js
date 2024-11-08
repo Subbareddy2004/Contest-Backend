@@ -10,6 +10,7 @@ const csv = require('csv-parser');
 const { Readable } = require('stream');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
+const Contest = require('../models/Contest');
 
 // Configure multer for memory storage
 const upload = multer({
@@ -496,6 +497,75 @@ router.put('/faculty/:id', auth, isAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error updating faculty:', error);
     res.status(500).json({ message: 'Error updating faculty' });
+  }
+});
+
+// Add this route handler
+router.get('/dashboard', auth, isAdmin, async (req, res) => {
+  try {
+    // Get overall statistics
+    const [
+      totalStudents,
+      totalFaculty,
+      totalProblems,
+      totalContests,
+      totalSubmissions,
+      totalAssignments
+    ] = await Promise.all([
+      User.countDocuments({ role: 'student' }),
+      User.countDocuments({ role: 'faculty' }),
+      Problem.countDocuments(),
+      Contest.countDocuments(),
+      Submission.countDocuments(),
+      Assignment.countDocuments()
+    ]);
+
+    // Get usage statistics for the last 7 days
+    const usageStats = await Submission.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+        }
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+          totalSubmissions: { $sum: 1 },
+          avgExecutionTime: { $avg: '$executionTime' }
+        }
+      },
+      {
+        $sort: { _id: 1 }
+      },
+      {
+        $project: {
+          name: '$_id',
+          totalSubmissions: 1,
+          avgExecutionTime: { $round: ['$avgExecutionTime', 2] },
+          _id: 0
+        }
+      }
+    ]);
+
+    const responseData = {
+      stats: {
+        totalStudents,
+        totalFaculty,
+        totalProblems,
+        totalContests,
+        totalSubmissions,
+        totalAssignments
+      },
+      usageStats
+    };
+
+    // Add logging to debug the response
+    console.log('Admin dashboard response:', responseData);
+
+    res.json(responseData);
+  } catch (error) {
+    console.error('Error fetching admin dashboard stats:', error);
+    res.status(500).json({ message: 'Error fetching dashboard statistics' });
   }
 });
 

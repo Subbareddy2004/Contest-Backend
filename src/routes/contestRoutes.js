@@ -362,44 +362,109 @@ router.post('/:id/problems/:problemId/run', auth, async (req, res) => {
 // Mark problem as completed
 router.post('/:id/problems/:problemId/complete', auth, async (req, res) => {
   try {
-    const contest = await Contest.findById(req.params.id)
-      .populate('problems.problem')
-      .populate('participants.student');
-      
+    console.log('Complete request received:', {
+      contestId: req.params.id,
+      problemId: req.params.problemId,
+      userId: req.user.id
+    });
+
+    const contest = await Contest.findById(req.params.id);
     if (!contest) {
       return res.status(404).json({ message: 'Contest not found' });
     }
 
+    // Find participant
     const participant = contest.participants.find(
-      p => p.student._id.toString() === req.user._id.toString()
+      p => p.student.toString() === req.user.id
     );
 
     if (!participant) {
       return res.status(404).json({ message: 'Participant not found' });
     }
 
-    // Check if problem exists in contest
-    const problemExists = contest.problems.some(
-      p => p.problem._id.toString() === req.params.problemId
+    // Find problem in contest
+    const contestProblem = contest.problems.find(
+      p => p.problem.toString() === req.params.problemId
     );
 
-    if (!problemExists) {
+    if (!contestProblem) {
       return res.status(404).json({ message: 'Problem not found in contest' });
     }
 
-    // Add to completed problems if not already completed
+    // Check if problem is already completed
     if (!participant.completedProblems.includes(req.params.problemId)) {
+      // Add to completed problems
       participant.completedProblems.push(req.params.problemId);
       
-      // Find problem points
-      const problem = contest.problems.find(
-        p => p.problem._id.toString() === req.params.problemId
-      );
-      
-      if (problem) {
-        participant.totalPoints += problem.points;
-      }
+      // Update total points
+      participant.totalPoints = (participant.totalPoints || 0) + contestProblem.points;
 
+      // Add submission
+      participant.submissions.push({
+        problem: req.params.problemId,
+        code: req.body.code,
+        status: 'PASSED',
+        submittedAt: new Date()
+      });
+
+      // Save changes
+      await contest.save();
+    }
+
+    // Populate response data
+    await contest.populate([
+      {
+        path: 'problems.problem',
+        select: 'title description sampleInput sampleOutput'
+      },
+      {
+        path: 'participants.student',
+        select: 'name email'
+      }
+    ]);
+
+    console.log('Updated participant data:', {
+      completedProblems: participant.completedProblems,
+      totalPoints: participant.totalPoints
+    });
+
+    res.json(contest);
+  } catch (error) {
+    console.error('Error completing problem:', error);
+    res.status(500).json({ message: 'Error completing problem' });
+  }
+});
+
+// POST /contests/:contestId/problems/:problemId/complete
+router.post('/:contestId/problems/:problemId/complete', auth, async (req, res) => {
+  try {
+    const contest = await Contest.findById(req.params.contestId);
+    if (!contest) {
+      return res.status(404).json({ message: 'Contest not found' });
+    }
+
+    const participant = contest.participants.find(
+      p => p.student.toString() === req.user.id
+    );
+
+    if (!participant) {
+      return res.status(404).json({ message: 'Participant not found' });
+    }
+
+    // Find the problem in the contest
+    const contestProblem = contest.problems.find(
+      p => p.problem.toString() === req.params.problemId
+    );
+
+    if (!contestProblem) {
+      return res.status(404).json({ message: 'Problem not found in contest' });
+    }
+
+    // Add to completedProblems if not already completed
+    if (!participant.completedProblems.includes(req.params.problemId)) {
+      participant.completedProblems.push(req.params.problemId);
+      participant.totalPoints += contestProblem.points;
+      
       // Add submission record
       participant.submissions.push({
         problem: req.params.problemId,
@@ -410,6 +475,18 @@ router.post('/:id/problems/:problemId/complete', auth, async (req, res) => {
 
       await contest.save();
     }
+
+    // Populate the response data
+    await contest.populate([
+      {
+        path: 'problems.problem',
+        select: 'title description sampleInput sampleOutput'
+      },
+      {
+        path: 'participants.student',
+        select: 'name email'
+      }
+    ]);
 
     res.json(contest);
   } catch (error) {
