@@ -5,7 +5,6 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const authRoutes = require('./routes/authRoutes');
 const problemRoutes = require('./routes/problemRoutes');
-const contestRoutes = require('./routes/contestRoutes');
 const studentRoutes = require('./routes/studentRoutes');
 const multer = require('multer');
 const assignmentRoutes = require('./routes/assignmentRoutes');
@@ -13,9 +12,9 @@ const submissionRoutes = require('./routes/submissionRoutes');
 const facultyRoutes = require('./routes/facultyRoutes');
 const leaderboardRoutes = require('./routes/leaderboardRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const contestRoutes = require('./routes/contestRoutes');
 const { requestLogger } = require('./middleware/logging');
 const { auth } = require('./middleware/auth');
-const Contest = require('./models/Contest');
 const Assignment = require('./models/Assignment');
 const User = require('./models/User');
 const Problem = require('./models/Problem');
@@ -58,7 +57,43 @@ app.use('/api/assignments', assignmentRoutes);
 app.use('/api/submissions', submissionRoutes);
 app.use('/api/leaderboard', leaderboardRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api', contestRoutes);
+app.use('/api/contests', contestRoutes);
+
+// Add this before your error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Error details:', {
+    message: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+    body: req.body
+  });
+  next(err);
+});
+
+// Add this after your routes
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+
+  if (err.name === 'CastError' && err.kind === 'ObjectId') {
+    return res.status(400).json({ 
+      message: 'Invalid ID format',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+
+  if (err instanceof mongoose.Error) {
+    return res.status(400).json({ 
+      message: 'Database operation failed',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+
+  res.status(500).json({ 
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
 
 // MongoDB connection
 mongoose.connect(process.env.MONGODB_URI, {

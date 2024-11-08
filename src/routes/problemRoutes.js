@@ -4,7 +4,7 @@ const { auth } = require('../middleware/auth');
 const { isStudent } = require('../middleware/roleCheck');
 const { isFaculty } = require('../middleware/roleCheck');
 const Problem = require('../models/Problem');
-const axios = require('axios');
+const { executeCode } = require('../services/codeExecutionService');
 
 // Student routes should come before generic routes
 // Get all problems for students
@@ -47,76 +47,28 @@ router.get('/student/problems/:id', auth, isStudent, async (req, res) => {
 // Run code for a problem
 router.post('/student/problems/:id/run', auth, isStudent, async (req, res) => {
   try {
-    const { code, language } = req.body;
+    const { code, language, input } = req.body;
     
-    // Map language to Codex format
-    const codexLanguage = {
-      'cpp': 'cpp',
-      'python': 'py',
-      'java': 'java',
-      'c': 'c'
-    }[language];
+    // Execute code using CodeX API
+    const result = await executeCode(code, language, input);
 
-    if (!codexLanguage) {
-      return res.status(400).json({ message: 'Unsupported language' });
+    if (result.error) {
+      return res.status(400).json({ 
+        success: false, 
+        error: result.error 
+      });
     }
 
-    const problem = await Problem.findById(req.params.id)
-      .select('title description testCases');
-
-    if (!problem) {
-      return res.status(404).json({ message: 'Problem not found' });
-    }
-
-    if (!problem.testCases || problem.testCases.length === 0) {
-      return res.status(400).json({ message: 'No test cases found for this problem' });
-    }
-
-    // Run code against test cases using Codex API
-    const results = await Promise.all(problem.testCases.map(async (testCase) => {
-      try {
-        const response = await axios.post('https://api.codex.jaagrav.in', {
-          code,
-          language: codexLanguage,
-          input: testCase.input
-        });
-
-        const actualOutput = (response.data.output || '').trim();
-        const expectedOutput = (testCase.output || '').trim();
-        const passed = actualOutput === expectedOutput;
-        const error = response.data.error || '';
-
-        return {
-          passed,
-          input: testCase.isHidden ? 'Hidden' : testCase.input,
-          expected: testCase.isHidden ? 'Hidden' : expectedOutput,
-          actual: testCase.isHidden ? 'Hidden' : actualOutput,
-          error,
-          isHidden: testCase.isHidden || false
-        };
-      } catch (error) {
-        return {
-          passed: false,
-          error: error.message,
-          isHidden: testCase.isHidden || false
-        };
-      }
-    }));
-
-    const allPassed = results.every(r => r.passed);
-
-    res.json({
-      success: true,
-      results,
-      allPassed
+    res.json({ 
+      success: true, 
+      output: result.output 
     });
 
   } catch (error) {
     console.error('Error running code:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to run code',
-      error: error.message
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to execute code' 
     });
   }
 });

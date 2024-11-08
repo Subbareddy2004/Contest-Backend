@@ -5,7 +5,6 @@ const { isFaculty } = require('../middleware/faculty');
 const User = require('../models/User');
 const Problem = require('../models/Problem');
 const Assignment = require('../models/Assignment');
-const Contest = require('../models/Contest');
 const multer = require('multer');
 const csv = require('csv-parser');
 const bcrypt = require('bcryptjs');
@@ -322,109 +321,6 @@ router.get('/assignments/:id/submissions', auth, isFaculty, async (req, res) => 
     res.json(allSubmissions);
   } catch (error) {
     console.error('Error fetching assignment submissions:', error);
-    res.status(500).json({ message: 'Error fetching submissions' });
-  }
-});
-
-// Update the contest leaderboard route
-router.get('/contests/:id/leaderboard', auth, isFaculty, async (req, res) => {
-  try {
-    const contest = await Contest.findOne({
-      _id: req.params.id,
-      createdBy: req.user.id
-    }).populate('problems');  // Make sure to populate problems
-
-    if (!contest) {
-      return res.status(404).json({ message: 'Contest not found' });
-    }
-
-    // Get only students added by this faculty
-    const students = await User.find({ 
-      role: 'student',
-      addedBy: req.user.id 
-    }).select('name email');
-
-    // Initialize leaderboard with all students
-    const leaderboard = students.map(student => ({
-      student: {
-        _id: student._id,
-        name: student.name,
-        email: student.email
-      },
-      status: 'Not Started',
-      score: 0,
-      submittedAt: null,
-      problemScores: contest.problems.map(p => ({
-        problemId: p._id,
-        score: 0,
-        status: 'Not Attempted'
-      }))
-    }));
-
-    res.json({
-      contest: {
-        _id: contest._id,
-        title: contest.title,
-        startTime: contest.startTime,
-        endTime: contest.endTime,
-        problems: contest.problems
-      },
-      leaderboard
-    });
-  } catch (error) {
-    console.error('Error fetching contest leaderboard:', error);
-    res.status(500).json({ message: 'Error fetching leaderboard' });
-  }
-});
-
-// Get contest submissions
-router.get('/contests/:id/submissions', auth, isFaculty, async (req, res) => {
-  try {
-    const contest = await Contest.findOne({
-      _id: req.params.id,
-      createdBy: req.user.id
-    }).populate({
-      path: 'submissions',
-      populate: {
-        path: 'student',
-        select: 'name email'
-      }
-    });
-
-    if (!contest) {
-      return res.status(404).json({ message: 'Contest not found' });
-    }
-
-    // Get all students and their submission status
-    const students = await User.find({ role: 'student' })
-      .select('name email');
-    
-    // Create a map of existing submissions
-    const submissionMap = new Map(
-      contest.submissions.map(sub => [sub.student._id.toString(), sub])
-    );
-
-    // Combine all students with their submission status
-    const allSubmissions = students.map(student => ({
-      student: {
-        _id: student._id,
-        name: student.name,
-        email: student.email
-      },
-      status: submissionMap.has(student._id.toString()) ? 'Completed' : 'Pending',
-      submittedAt: submissionMap.get(student._id.toString())?.submittedAt || null,
-      score: submissionMap.get(student._id.toString())?.score || 0
-    }));
-
-    res.json({
-      contest: {
-        _id: contest._id,
-        title: contest.title
-      },
-      submissions: allSubmissions
-    });
-  } catch (error) {
-    console.error('Error fetching contest submissions:', error);
     res.status(500).json({ message: 'Error fetching submissions' });
   }
 });
@@ -804,7 +700,6 @@ router.get('/dashboard', auth, isFaculty, async (req, res) => {
     const [
       studentCount,
       problems,
-      contests,
       assignments,
       submissions
     ] = await Promise.all([
@@ -813,9 +708,6 @@ router.get('/dashboard', auth, isFaculty, async (req, res) => {
         role: 'student' 
       }),
       Problem.find({ createdBy: facultyId })
-        .sort('-createdAt')
-        .limit(5),
-      Contest.find({ createdBy: facultyId })
         .sort('-createdAt')
         .limit(5),
       Assignment.find({ createdBy: facultyId })
@@ -834,12 +726,6 @@ router.get('/dashboard', auth, isFaculty, async (req, res) => {
       .populate('userId', 'name')
       .populate('problemId', 'title')
     ]);
-
-    // Calculate active contests
-    const activeContests = contests.filter(contest => {
-      const now = new Date();
-      return now >= contest.startTime && now <= contest.endTime;
-    });
 
     // Calculate success rate
     const totalSubmissions = await Submission.countDocuments({
@@ -869,14 +755,11 @@ router.get('/dashboard', auth, isFaculty, async (req, res) => {
       stats: {
         studentCount,
         problemCount: await Problem.countDocuments({ createdBy: facultyId }),
-        contestCount: contests.length,
-        activeContestCount: activeContests.length,
         submissionCount: totalSubmissions,
         successRate: `${successRate}%`
       },
       recentActivity: {
         problems,
-        contests,
         assignments,
         submissions
       }
@@ -1013,25 +896,6 @@ router.get('/submissions/stats', auth, isFaculty, async (req, res) => {
   } catch (error) {
     console.error('Error fetching submission stats:', error);
     res.status(500).json({ message: 'Error fetching submission statistics' });
-  }
-});
-
-// Get single contest
-router.get('/contests/:id', auth, isFaculty, async (req, res) => {
-  try {
-    const contest = await Contest.findOne({
-      _id: req.params.id,
-      createdBy: req.user.id
-    }).populate('problems.problem');
-    
-    if (!contest) {
-      return res.status(404).json({ message: 'Contest not found' });
-    }
-    
-    res.json(contest);
-  } catch (error) {
-    console.error('Error fetching contest:', error);
-    res.status(500).json({ message: 'Error fetching contest' });
   }
 });
 

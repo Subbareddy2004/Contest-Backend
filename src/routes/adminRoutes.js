@@ -4,7 +4,6 @@ const { auth } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
 const User = require('../models/User');
 const Problem = require('../models/Problem');
-const Contest = require('../models/Contest');
 const Assignment = require('../models/Assignment');
 const Submission = require('../models/Submission');
 const csv = require('csv-parser');

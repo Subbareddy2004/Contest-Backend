@@ -32,7 +32,18 @@ const problemSchema = new mongoose.Schema({
   },
   points: {
     type: Number,
+    required: true,
     default: 10
+  },
+  timeLimit: {
+    type: Number,
+    required: true,
+    default: 1000  // in milliseconds
+  },
+  memoryLimit: {
+    type: Number,
+    required: true,
+    default: 256  // in MB
   },
   sampleInput: {
     type: String,
@@ -51,6 +62,11 @@ const problemSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  contestId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Contest',
+    required: false  // Optional, as problems can exist outside contests
   }
 }, {
   timestamps: true
