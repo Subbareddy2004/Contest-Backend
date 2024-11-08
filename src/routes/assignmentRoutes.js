@@ -189,157 +189,151 @@ router.get('/:id', auth, async (req, res) => {
   }
 });
 
-// Add this route after your existing routes
+// Update the language mapping to match CodeX API requirements
+const LANGUAGE_MAP = {
+  'cpp': 'cpp',
+  'c': 'c',
+  'python': 'py',
+  'java': 'java'
+};
+
+// Add template programs
+const CODE_TEMPLATES = {
+  cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    //Write your code here\n    return 0;\n}',
+  c: '#include <stdio.h>\n\nint main() {\n    //Write your code here\n    return 0;\n}',
+  python: '# Write your code here',
+  java: 'public class Main {\n    public static void main(String[] args) {\n        //Write your code here\n    }\n}'
+};
+
+// Update the submission route
 router.post('/:id/submit', auth, async (req, res) => {
   try {
     const { problemId, code, language } = req.body;
-    const assignment = await Assignment.findById(req.params.id)
-      .populate({
-        path: 'problems',
-        match: { _id: problemId },
-        populate: {
-          path: 'testCases'
-        }
+    const assignmentId = req.params.id;
+
+    // Validate input
+    if (!problemId || !code || !language) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields'
       });
+    }
 
+    // Get assignment and problem details
+    const assignment = await Assignment.findById(assignmentId);
     if (!assignment) {
-      return res.status(404).json({ message: 'Assignment not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Assignment not found'
+      });
     }
 
-    // Add class field if it doesn't exist
-    if (!assignment.class) {
-      assignment.class = req.user.class;
-    }
-
-    const problem = assignment.problems[0];
+    // Find the problem in the assignment
+    const problem = await Problem.findById(problemId);
     if (!problem) {
-      return res.status(404).json({ message: 'Problem not found in assignment' });
+      return res.status(404).json({
+        success: false,
+        message: 'Problem not found'
+      });
     }
 
-    if (!problem.testCases || problem.testCases.length === 0) {
-      return res.status(400).json({ message: 'No test cases found for this problem' });
+    // Map language to CodeX API format
+    const codexLanguage = LANGUAGE_MAP[language];
+    if (!codexLanguage) {
+      return res.status(400).json({
+        success: false,
+        message: 'Unsupported programming language'
+      });
     }
 
-    // Test all test cases using CodeX API
-    let allTestsPassed = true;
-    let failedTestCase = null;
-
-    for (const testCase of problem.testCases) {
+    // Run test cases
+    const results = await Promise.all(problem.testCases.map(async testCase => {
       try {
         const response = await axios.post('https://api.codex.jaagrav.in', {
           code,
-          language: language === 'cpp' ? 'cpp' : language,
+          language: codexLanguage,
           input: testCase.input
         });
 
-        if (response.data.error) {
-          return res.status(400).json({ 
-            success: false, 
-            message: 'Compilation Error', 
-            error: response.data.error 
-          });
-        }
+        const actualOutput = (response.data.output || '').trim();
+        const expectedOutput = testCase.output.trim();
+        const passed = actualOutput === expectedOutput;
 
-        const actualOutput = response.data.output?.trim() || '';
-        const expectedOutput = testCase.output?.trim() || '';
-
-        console.log('Test case comparison:', {
-          input: testCase.input,
-          actualOutput,
-          expectedOutput,
-          rawTestCase: testCase
-        });
-
-        if (actualOutput !== expectedOutput) {
-          allTestsPassed = false;
-          failedTestCase = {
-            input: testCase.input,
-            expectedOutput,
-            actualOutput
-          };
-          break;
-        }
+        return {
+          passed,
+          input: testCase.isHidden ? 'Hidden' : testCase.input,
+          expected: testCase.isHidden ? 'Hidden' : expectedOutput,
+          actual: testCase.isHidden ? 'Hidden' : actualOutput,
+          isHidden: testCase.isHidden || false
+        };
       } catch (error) {
-        console.error('CodeX API error:', error);
-        return res.status(500).json({
-          success: false,
-          message: 'Error executing code',
-          error: error.message
-        });
+        console.error('Test case execution error:', error);
+        return {
+          passed: false,
+          error: error.message,
+          isHidden: testCase.isHidden || false
+        };
       }
-    }
+    }));
 
-    // Update submission in the assignment
+    const allPassed = results.every(r => r.passed);
+
+    // Create submission record
     const submission = {
-      student: req.user.id,
+      student: req.user._id,
       problemId,
       code,
       language,
-      status: allTestsPassed ? 'PASSED' : 'FAILED',
-      class: req.user.class
+      status: allPassed ? 'PASSED' : 'FAILED',
+      submittedAt: new Date()
     };
 
+    // Add submission to assignment
     if (!assignment.submissions) {
       assignment.submissions = [];
     }
-    
     assignment.submissions.push(submission);
+    await assignment.save();
 
-    // Use save with validation disabled for this update
-    await assignment.save({ validateBeforeSave: false });
-
-    if (allTestsPassed) {
-      // Update the assignment's submissions
-      await Assignment.findByIdAndUpdate(req.params.id, {
-        $push: {
-          submissions: {
-            student: req.user.id,
-            problemId,
-            code,
-            language,
-            status: 'PASSED',
-            points: 10, // Add points field
-            submittedAt: new Date()
-          }
-        }
-      });
-
-      // Reload the assignment data to get updated counts
-      const updatedAssignment = await Assignment.findById(req.params.id).lean();
-      const solvedProblems = new Set(
-        updatedAssignment.submissions
-          .filter(sub => 
-            sub.student.toString() === req.user.id.toString() && 
-            sub.status === 'PASSED'
-          )
-          .map(sub => sub.problemId.toString())
-      );
-
-      const earnedPoints = solvedProblems.size * 10;
-      const totalPoints = updatedAssignment.problems.length * 10;
-
-      res.json({
-        success: true,
-        message: 'All test cases passed!',
-        problemsSolved: solvedProblems.size,
-        totalProblems: updatedAssignment.problems.length,
-        earnedPoints,
-        totalPoints
-      });
-    } else {
-      res.json({
-        success: false,
-        message: 'Some test cases failed',
-        failedTestCase: !allTestsPassed && !failedTestCase?.isHidden ? failedTestCase : null
-      });
-    }
+    res.json({
+      success: true,
+      results,
+      allPassed,
+      message: allPassed ? 'All test cases passed!' : 'Some test cases failed'
+    });
 
   } catch (error) {
     console.error('Submission error:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: 'Error processing submission',
-      error: error.message 
+      error: error.message
+    });
+  }
+});
+
+// Add a route to get code template
+router.get('/:id/problem/:problemId/template', auth, async (req, res) => {
+  try {
+    const { language } = req.query;
+    
+    if (!CODE_TEMPLATES[language]) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid language selected'
+      });
+    }
+
+    res.json({
+      success: true,
+      template: CODE_TEMPLATES[language]
+    });
+
+  } catch (error) {
+    console.error('Error fetching template:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching template'
     });
   }
 });

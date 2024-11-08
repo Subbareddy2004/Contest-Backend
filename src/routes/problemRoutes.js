@@ -47,28 +47,61 @@ router.get('/student/problems/:id', auth, isStudent, async (req, res) => {
 // Run code for a problem
 router.post('/student/problems/:id/run', auth, isStudent, async (req, res) => {
   try {
-    const { code, language, input } = req.body;
+    const { code, language } = req.body;
     
-    // Execute code using CodeX API
-    const result = await executeCode(code, language, input);
-
-    if (result.error) {
+    // Input validation
+    if (!code || !language) {
       return res.status(400).json({ 
-        success: false, 
-        error: result.error 
+        success: false,
+        message: 'Code and language are required'
       });
     }
 
-    res.json({ 
-      success: true, 
-      output: result.output 
-    });
+    // Get the problem to check test cases
+    const problem = await Problem.findById(req.params.id);
+    if (!problem) {
+      return res.status(404).json({
+        success: false,
+        message: 'Problem not found'
+      });
+    }
+
+    // Execute code against test cases
+    try {
+      const testCase = problem.testCases[0]; // Use first test case for initial run
+      const result = await executeCode(code, language, testCase.input);
+
+      // Compare output
+      const expectedOutput = testCase.output.trim();
+      const actualOutput = (result.output || '').trim();
+      const passed = actualOutput === expectedOutput;
+
+      res.json({
+        success: true,
+        output: result.output,
+        error: result.error,
+        testCase: {
+          input: testCase.input,
+          expectedOutput,
+          actualOutput,
+          passed
+        }
+      });
+
+    } catch (execError) {
+      console.error('Code execution error:', execError);
+      res.status(400).json({
+        success: false,
+        message: execError.message,
+        isExecutionError: true
+      });
+    }
 
   } catch (error) {
-    console.error('Error running code:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to execute code' 
+    console.error('Error processing code execution:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error while processing code execution'
     });
   }
 });

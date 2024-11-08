@@ -58,10 +58,6 @@ const assignmentSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
-  class: {
-    type: String,
-    required: true
-  },
   dueDate: {
     type: Date,
     required: true

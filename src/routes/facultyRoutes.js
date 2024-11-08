@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const express = require('express');
 const router = express.Router();
 const { auth } = require('../middleware/auth');
@@ -192,40 +193,44 @@ router.get('/assignments', auth, isFaculty, async (req, res) => {
 // Create new assignment
 router.post('/assignments', auth, isFaculty, async (req, res) => {
   try {
-    const { title, description, class: className, dueDate, problems } = req.body;
+    const { title, description, dueDate, problems } = req.body;
 
-    // Validate problems array
-    if (!Array.isArray(problems) || problems.length === 0) {
-      return res.status(400).json({ message: 'At least one problem is required' });
+    // Validate required fields
+    if (!title || !description || !dueDate || !problems || !problems.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'All fields are required'
+      });
     }
 
-    // Format problems with required fields
-    const formattedProblems = problems.map(problem => ({
-      title: problem.title,
-      description: problem.description,
-      points: problem.points || 10,
-      language: problem.language || 'python',
-      testCases: (problem.testCases || []).map(tc => ({
-        input: tc.input,
-        expectedOutput: tc.expectedOutput,
-        isHidden: tc.isHidden || false
-      }))
-    }));
+    // Convert problem IDs to ObjectIds using new keyword
+    const problemIds = problems.map(id => new mongoose.Types.ObjectId(id));
 
+    // Create new assignment
     const assignment = new Assignment({
       title,
       description,
-      class: className,
-      dueDate,
-      problems: formattedProblems,
-      createdBy: req.user.id
+      dueDate: new Date(dueDate),
+      problems: problemIds,
+      createdBy: req.user._id,
+      class: 'DEFAULT'  // Using default class as it's required
     });
 
-    await assignment.save();
-    res.status(201).json(assignment);
+    const savedAssignment = await assignment.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Assignment created successfully',
+      assignment: savedAssignment
+    });
+
   } catch (error) {
     console.error('Error creating assignment:', error);
-    res.status(500).json({ message: 'Error creating assignment' });
+    res.status(500).json({
+      success: false,
+      message: 'Error creating assignment',
+      error: error.message
+    });
   }
 });
 
@@ -276,52 +281,76 @@ router.get('/assignments/:id', auth, isFaculty, checkOwnership(Assignment), asyn
 // Update the submissions route
 router.get('/assignments/:id/submissions', auth, isFaculty, async (req, res) => {
   try {
-    // Get the assignment with existing submissions
-    const assignment = await Assignment.findOne({
-      _id: req.params.id,
-      createdBy: req.user.id
-    }).populate({
-      path: 'submissions',
-      populate: {
-        path: 'student',
+    const assignment = await Assignment.findById(req.params.id)
+      .populate({
+        path: 'submissions.student',
         select: 'name email'
-      }
-    });
+      });
 
     if (!assignment) {
       return res.status(404).json({ message: 'Assignment not found' });
     }
 
-    // Get only students added by this faculty
-    const allStudents = await User.find({ 
-      role: 'student',
-      addedBy: req.user.id  // Only get students added by this faculty
-    }).select('name email');
+    // Get all students
+    const students = await User.find({ role: 'student' }).select('name email');
 
-    // Create a map of existing submissions
-    const submissionMap = new Map(
-      assignment.submissions?.map(sub => [sub.student._id.toString(), sub]) || []
-    );
+    // Create a map to store the latest submission for each student and problem
+    const studentSubmissions = new Map();
 
-    // Combine all students with their submission status
-    const allSubmissions = allStudents.map(student => {
-      const existingSubmission = submissionMap.get(student._id.toString());
+    // Process all submissions
+    assignment.submissions.forEach(submission => {
+      const studentId = submission.student._id.toString();
+      if (!studentSubmissions.has(studentId)) {
+        studentSubmissions.set(studentId, {
+          student: submission.student,
+          problemsCompleted: new Set(),
+          lastSubmission: submission.submittedAt,
+          status: submission.status
+        });
+      }
+
+      const studentData = studentSubmissions.get(studentId);
       
-      return existingSubmission || {
+      // Update last submission time if this is more recent
+      if (new Date(submission.submittedAt) > new Date(studentData.lastSubmission)) {
+        studentData.lastSubmission = submission.submittedAt;
+        studentData.status = submission.status;
+      }
+
+      // Add to completed problems if PASSED
+      if (submission.status === 'PASSED') {
+        studentData.problemsCompleted.add(submission.problemId.toString());
+      }
+    });
+
+    // Create final submissions array
+    const submissions = students.map(student => {
+      const studentData = studentSubmissions.get(student._id.toString()) || {
+        student,
+        problemsCompleted: new Set(),
+        lastSubmission: null,
+        status: 'Pending'
+      };
+
+      const problemsCompleted = studentData.problemsCompleted.size;
+      const score = Math.round((problemsCompleted / assignment.problems.length) * 100);
+
+      return {
         student: {
           _id: student._id,
           name: student.name,
           email: student.email
         },
-        status: 'Pending',
-        submittedAt: null,
-        score: null
+        status: studentData.status,
+        problemsCompleted: `${problemsCompleted} / ${assignment.problems.length}`,
+        lastSubmission: studentData.lastSubmission,
+        score: problemsCompleted > 0 ? score : 0
       };
     });
 
-    res.json(allSubmissions);
+    res.json(submissions);
   } catch (error) {
-    console.error('Error fetching assignment submissions:', error);
+    console.error('Error fetching submissions:', error);
     res.status(500).json({ message: 'Error fetching submissions' });
   }
 });
@@ -1046,69 +1075,67 @@ router.get('/recent-submissions', auth, async (req, res) => {
 // Get assignment submissions (faculty view)
 router.get('/assignments/:id/submissions', auth, isFaculty, async (req, res) => {
   try {
-    const assignmentId = req.params.id;
-    const assignment = await Assignment.findById(assignmentId);
-    
+    const assignment = await Assignment.findById(req.params.id)
+      .populate('problems')
+      .populate({
+        path: 'submissions.student',
+        select: 'name email'
+      });
+
     if (!assignment) {
       return res.status(404).json({ message: 'Assignment not found' });
     }
 
-    // Get all submissions for this assignment
-    const submissions = await Submission.aggregate([
-      {
-        $match: { assignment: assignment._id }
-      },
-      {
-        $group: {
-          _id: '$student',
-          problemsCompleted: {
-            $sum: { $cond: [{ $eq: ['$status', 'PASSED'] }, 1, 0] }
-          },
-          lastSubmission: { $max: '$submittedAt' },
-          score: {
-            $avg: {
-              $cond: [
-                { $eq: ['$status', 'PASSED'] },
-                100,
-                0
-              ]
-            }
-          }
-        }
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'student'
-        }
-      },
-      {
-        $unwind: '$student'
-      },
-      {
-        $project: {
-          'student.name': 1,
-          'student.email': 1,
-          problemsCompleted: 1,
-          totalProblems: { $size: assignment.problems },
-          lastSubmission: 1,
-          score: { $round: ['$score', 0] },
-          status: {
-            $cond: {
-              if: { $gte: ['$score', assignment.passingScore || 70] },
-              then: 'PASSED',
-              else: 'IN_PROGRESS'
-            }
-          }
-        }
+    // Get all students in the class
+    const students = await User.find({
+      role: 'student',
+      addedBy: req.user._id  // Only get students added by this faculty
+    }).select('name email');
+
+    // Create a map of student submissions grouped by student ID
+    const submissionMap = new Map();
+    assignment.submissions.forEach(sub => {
+      const studentId = sub.student._id.toString();
+      if (!submissionMap.has(studentId)) {
+        submissionMap.set(studentId, []);
       }
-    ]);
+      submissionMap.get(studentId).push(sub);
+    });
+
+    // Process submissions for each student
+    const submissions = students.map(student => {
+      const studentSubmissions = submissionMap.get(student._id.toString()) || [];
+      
+      // Count unique passed problems
+      const uniquePassedProblems = new Set(
+        studentSubmissions
+          .filter(sub => sub.status === 'PASSED')
+          .map(sub => sub.problemId.toString())
+      );
+
+      const problemsCompleted = uniquePassedProblems.size;
+      const lastSubmission = studentSubmissions.length > 0 
+        ? studentSubmissions.reduce((latest, current) => 
+            new Date(current.submittedAt) > new Date(latest.submittedAt) ? current : latest
+          ) 
+        : null;
+
+      return {
+        student: {
+          _id: student._id,
+          name: student.name,
+          email: student.email
+        },
+        status: lastSubmission ? lastSubmission.status : 'Pending',
+        problemsCompleted: `${problemsCompleted} / ${assignment.problems.length}`,
+        lastSubmission: lastSubmission ? lastSubmission.submittedAt : null,
+        score: problemsCompleted > 0 ? Math.round((problemsCompleted / assignment.problems.length) * 100) : 0
+      };
+    });
 
     res.json(submissions);
   } catch (error) {
-    console.error('Error fetching assignment submissions:', error);
+    console.error('Error fetching submissions:', error);
     res.status(500).json({ message: 'Error fetching submissions' });
   }
 });
