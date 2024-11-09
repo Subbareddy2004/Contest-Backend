@@ -58,4 +58,53 @@ router.get('/recent', auth, isFaculty, async (req, res) => {
   }
 });
 
+// Get submission for a specific problem
+router.get('/assignment/:assignmentId/problem/:problemId', auth, async (req, res) => {
+  try {
+    // Find the latest submission for this problem
+    const submission = await Submission.findOne({
+      student: req.user.id,
+      assignment: req.params.assignmentId,
+      problemId: req.params.problemId
+    })
+    .sort({ submittedAt: -1 }); // Get the most recent submission
+
+    if (!submission) {
+      return res.json(null);
+    }
+
+    res.json({
+      code: submission.code,
+      language: submission.language,
+      status: submission.status
+    });
+  } catch (error) {
+    console.error('Error fetching submission:', error);
+    res.status(500).json({ message: 'Error fetching submission' });
+  }
+});
+
+// Save submission
+router.post('/assignment/:assignmentId/problem/:problemId', auth, async (req, res) => {
+  try {
+    const { code, language, status } = req.body;
+
+    const submission = new Submission({
+      student: req.user.id,
+      assignment: req.params.assignmentId,
+      problemId: req.params.problemId,
+      code,
+      language,
+      status,
+      submittedAt: new Date()
+    });
+
+    await submission.save();
+    res.json(submission);
+  } catch (error) {
+    console.error('Error saving submission:', error);
+    res.status(500).json({ message: 'Error saving submission' });
+  }
+});
+
 module.exports = router;

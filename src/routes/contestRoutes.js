@@ -4,6 +4,7 @@ const Contest = require('../models/Contest');
 const { auth } = require('../middleware/auth');
 const { isFaculty } = require('../middleware/roleCheck');
 const axios = require('axios');
+const Submission = require('../models/Submission');
 
 // Create contest
 router.post('/', auth, isFaculty, async (req, res) => {
@@ -447,6 +448,45 @@ router.post('/:id/problems/:problemId/complete', auth, async (req, res) => {
   } catch (error) {
     console.error('Error completing problem:', error);
     res.status(500).json({ message: 'Error completing problem' });
+  }
+});
+
+// Get last submission for a problem
+router.get('/:contestId/problems/:problemId/submissions', auth, async (req, res) => {
+  try {
+    const submission = await Submission.findOne({
+      student: req.user.id,
+      contest: req.params.contestId,
+      problemId: req.params.problemId
+    }).sort({ submittedAt: -1 });
+
+    res.json(submission || null);
+  } catch (error) {
+    console.error('Error fetching submission:', error);
+    res.status(500).json({ message: 'Error fetching submission' });
+  }
+});
+
+// Store submission
+router.post('/:contestId/problems/:problemId/store-submission', auth, async (req, res) => {
+  try {
+    const { code, language, status } = req.body;
+    
+    const submission = new Submission({
+      student: req.user.id,
+      contest: req.params.contestId,
+      problemId: req.params.problemId,
+      code,
+      language,
+      status,
+      submittedAt: new Date()
+    });
+
+    await submission.save();
+    res.json(submission);
+  } catch (error) {
+    console.error('Error storing submission:', error);
+    res.status(500).json({ message: 'Error storing submission' });
   }
 });
 

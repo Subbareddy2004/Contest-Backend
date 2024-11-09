@@ -773,4 +773,43 @@ router.get('/faculty/assignments/:id/submissions', auth, async (req, res) => {
   }
 });
 
+// Get last submission for a problem
+router.get('/:assignmentId/submissions/:problemId', auth, async (req, res) => {
+  try {
+    const submission = await Submission.findOne({
+      student: req.user.id,
+      assignment: req.params.assignmentId,
+      problemId: req.params.problemId
+    }).sort({ submittedAt: -1 });
+
+    res.json(submission || null);
+  } catch (error) {
+    console.error('Error fetching submission:', error);
+    res.status(500).json({ message: 'Error fetching submission' });
+  }
+});
+
+// Store submission
+router.post('/:assignmentId/store-submission', auth, async (req, res) => {
+  try {
+    const { problemId, code, language, status } = req.body;
+    
+    const submission = new Submission({
+      student: req.user.id,
+      assignment: req.params.assignmentId,
+      problemId,
+      code,
+      language,
+      status,
+      submittedAt: new Date()
+    });
+
+    await submission.save();
+    res.json(submission);
+  } catch (error) {
+    console.error('Error storing submission:', error);
+    res.status(500).json({ message: 'Error storing submission' });
+  }
+});
+
 module.exports = router;

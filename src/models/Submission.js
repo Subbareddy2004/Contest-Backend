@@ -6,20 +6,29 @@ const submissionSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  contest: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Contest'
+  },
   assignment: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Assignment',
-    required: true
+    ref: 'Assignment'
   },
   problemId: {
     type: mongoose.Schema.Types.ObjectId,
     required: true
   },
-  code: String,
-  language: String,
+  code: {
+    type: String,
+    required: true
+  },
+  language: {
+    type: String,
+    required: true
+  },
   status: {
     type: String,
-    enum: ['PASSED', 'FAILED', 'IN_PROGRESS'],
+    enum: ['PASSED', 'FAILED'],
     required: true
   },
   submittedAt: {
