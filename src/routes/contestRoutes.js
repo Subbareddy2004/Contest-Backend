@@ -323,7 +323,8 @@ router.post('/:id/problems/:problemId/run', auth, async (req, res) => {
       'cpp': 'cpp',
       'python': 'py',
       'java': 'java',
-      'javascript': 'js'
+      'javascript': 'js',
+      'c': 'c'
     }[language];
 
     if (!codexLanguage) {
