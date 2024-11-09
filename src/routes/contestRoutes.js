@@ -207,33 +207,45 @@ router.post('/:id/problems/:problemId/submit', auth, async (req, res) => {
 router.get('/:id/leaderboard', auth, async (req, res) => {
   try {
     const contest = await Contest.findById(req.params.id)
-      .populate('participants.student', 'name email');
+      .populate('participants.student', 'name email')
+      .populate('problems.problem');
 
     if (!contest) {
       return res.status(404).json({ message: 'Contest not found' });
     }
 
     const leaderboard = contest.participants
-      .map(participant => ({
-        student: {
-          name: participant.student.name,
-          email: participant.student.email
-        },
-        totalPoints: participant.totalPoints,
-        problemsSolved: participant.submissions.filter(s => s.status === 'PASSED').length,
-        lastSubmission: participant.submissions.length > 0 
-          ? participant.submissions[participant.submissions.length - 1].submittedAt
-          : null
-      }))
+      .map(participant => {
+        const totalPoints = participant.completedProblems.reduce((sum, problemId) => {
+          const problem = contest.problems.find(p => p.problem._id.toString() === problemId.toString());
+          return sum + (problem ? problem.points : 0);
+        }, 0);
+
+        return {
+          student: {
+            name: participant.student.name,
+            email: participant.student.email
+          },
+          totalPoints: totalPoints,
+          problemsSolved: participant.completedProblems.length,
+          lastSubmission: participant.submissions.length > 0 
+            ? participant.submissions[participant.submissions.length - 1].submittedAt
+            : null
+        };
+      })
       .sort((a, b) => {
         if (b.totalPoints !== a.totalPoints) {
           return b.totalPoints - a.totalPoints;
+        }
+        if (b.problemsSolved !== a.problemsSolved) {
+          return b.problemsSolved - a.problemsSolved;
         }
         return a.lastSubmission - b.lastSubmission;
       });
 
     res.json(leaderboard);
   } catch (error) {
+    console.error('Error fetching leaderboard:', error);
     res.status(500).json({ message: 'Error fetching leaderboard' });
   }
 });
@@ -374,110 +386,52 @@ router.post('/:id/problems/:problemId/complete', auth, async (req, res) => {
       return res.status(404).json({ message: 'Contest not found' });
     }
 
-    // Find participant
+    // Find participant using req.user.id instead of req.body.userId
     const participant = contest.participants.find(
       p => p.student.toString() === req.user.id
     );
 
     if (!participant) {
-      return res.status(404).json({ message: 'Participant not found' });
-    }
-
-    // Find problem in contest
-    const contestProblem = contest.problems.find(
-      p => p.problem.toString() === req.params.problemId
-    );
-
-    if (!contestProblem) {
-      return res.status(404).json({ message: 'Problem not found in contest' });
-    }
-
-    // Check if problem is already completed
-    if (!participant.completedProblems.includes(req.params.problemId)) {
-      // Add to completed problems
-      participant.completedProblems.push(req.params.problemId);
-      
-      // Update total points
-      participant.totalPoints = (participant.totalPoints || 0) + contestProblem.points;
-
-      // Add submission
-      participant.submissions.push({
-        problem: req.params.problemId,
-        code: req.body.code,
-        status: 'PASSED',
-        submittedAt: new Date()
+      // If participant doesn't exist, add them
+      contest.participants.push({
+        student: req.user.id,
+        startTime: new Date(),
+        completedProblems: [req.params.problemId],
+        submissions: [{
+          problem: req.params.problemId,
+          code: req.body.code,
+          status: 'PASSED',
+          submittedAt: new Date()
+        }],
+        totalPoints: 0  // Will be updated below
       });
+    } else {
+      // Add to completedProblems if not already completed
+      if (!participant.completedProblems.includes(req.params.problemId)) {
+        participant.completedProblems.push(req.params.problemId);
+        
+        // Find the problem points
+        const contestProblem = contest.problems.find(
+          p => p.problem.toString() === req.params.problemId
+        );
+        
+        if (contestProblem) {
+          participant.totalPoints += contestProblem.points;
+        }
 
-      // Save changes
-      await contest.save();
+        // Add submission
+        participant.submissions.push({
+          problem: req.params.problemId,
+          code: req.body.code,
+          status: 'PASSED',
+          submittedAt: new Date()
+        });
+      }
     }
+
+    await contest.save();
 
     // Populate response data
-    await contest.populate([
-      {
-        path: 'problems.problem',
-        select: 'title description sampleInput sampleOutput'
-      },
-      {
-        path: 'participants.student',
-        select: 'name email'
-      }
-    ]);
-
-    console.log('Updated participant data:', {
-      completedProblems: participant.completedProblems,
-      totalPoints: participant.totalPoints
-    });
-
-    res.json(contest);
-  } catch (error) {
-    console.error('Error completing problem:', error);
-    res.status(500).json({ message: 'Error completing problem' });
-  }
-});
-
-// POST /contests/:contestId/problems/:problemId/complete
-router.post('/:contestId/problems/:problemId/complete', auth, async (req, res) => {
-  try {
-    const contest = await Contest.findById(req.params.contestId);
-    if (!contest) {
-      return res.status(404).json({ message: 'Contest not found' });
-    }
-
-    const participant = contest.participants.find(
-      p => p.student.toString() === req.user.id
-    );
-
-    if (!participant) {
-      return res.status(404).json({ message: 'Participant not found' });
-    }
-
-    // Find the problem in the contest
-    const contestProblem = contest.problems.find(
-      p => p.problem.toString() === req.params.problemId
-    );
-
-    if (!contestProblem) {
-      return res.status(404).json({ message: 'Problem not found in contest' });
-    }
-
-    // Add to completedProblems if not already completed
-    if (!participant.completedProblems.includes(req.params.problemId)) {
-      participant.completedProblems.push(req.params.problemId);
-      participant.totalPoints += contestProblem.points;
-      
-      // Add submission record
-      participant.submissions.push({
-        problem: req.params.problemId,
-        code: req.body.code,
-        status: 'PASSED',
-        submittedAt: new Date()
-      });
-
-      await contest.save();
-    }
-
-    // Populate the response data
     await contest.populate([
       {
         path: 'problems.problem',
