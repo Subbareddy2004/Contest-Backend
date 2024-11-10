@@ -500,69 +500,98 @@ router.put('/faculty/:id', auth, isAdmin, async (req, res) => {
   }
 });
 
-// Add this route handler
+// Update the dashboard route handler
 router.get('/dashboard', auth, isAdmin, async (req, res) => {
   try {
+    const timeRange = req.query.timeRange || '1w';
+    let startDate = new Date();
+
+    // Calculate start date based on time range
+    switch (timeRange) {
+      case '24h':
+        startDate.setHours(startDate.getHours() - 24);
+        break;
+      case '1w':
+        startDate.setDate(startDate.getDate() - 7);
+        break;
+      case '1m':
+        startDate.setMonth(startDate.getMonth() - 1);
+        break;
+      case '3m':
+        startDate.setMonth(startDate.getMonth() - 3);
+        break;
+      case '6m':
+        startDate.setMonth(startDate.getMonth() - 6);
+        break;
+      case '1y':
+        startDate.setFullYear(startDate.getFullYear() - 1);
+        break;
+      case 'all':
+        startDate = new Date(0); // Beginning of time
+        break;
+      default:
+        startDate.setDate(startDate.getDate() - 7);
+    }
+
+    // Get submission statistics
+    const submissionStats = await Submission.aggregate([
+      {
+        $match: {
+          submittedAt: { $gte: startDate }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { 
+              format: timeRange === '24h' ? '%H:00' : '%Y-%m-%d',
+              date: '$submittedAt'
+            }
+          },
+          submissions: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { '_id': 1 }
+      },
+      {
+        $project: {
+          _id: 0,
+          date: '$_id',
+          submissions: 1
+        }
+      }
+    ]);
+
     // Get overall statistics
     const [
       totalStudents,
       totalFaculty,
       totalProblems,
       totalContests,
-      totalSubmissions,
-      totalAssignments
+      totalAssignments,
+      totalSubmissions
     ] = await Promise.all([
       User.countDocuments({ role: 'student' }),
       User.countDocuments({ role: 'faculty' }),
       Problem.countDocuments(),
       Contest.countDocuments(),
-      Submission.countDocuments(),
-      Assignment.countDocuments()
+      Assignment.countDocuments(),
+      Submission.countDocuments()
     ]);
 
-    // Get usage statistics for the last 7 days
-    const usageStats = await Submission.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
-        }
-      },
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-          totalSubmissions: { $sum: 1 },
-          avgExecutionTime: { $avg: '$executionTime' }
-        }
-      },
-      {
-        $sort: { _id: 1 }
-      },
-      {
-        $project: {
-          name: '$_id',
-          totalSubmissions: 1,
-          avgExecutionTime: { $round: ['$avgExecutionTime', 2] },
-          _id: 0
-        }
-      }
-    ]);
-
-    const responseData = {
+    res.json({
       stats: {
         totalStudents,
         totalFaculty,
         totalProblems,
         totalContests,
-        totalSubmissions,
-        totalAssignments
+        totalAssignments,
+        totalSubmissions
       },
-      usageStats
-    };
+      submissionStats
+    });
 
-    // Add logging to debug the response
-    console.log('Admin dashboard response:', responseData);
-
-    res.json(responseData);
   } catch (error) {
     console.error('Error fetching admin dashboard stats:', error);
     res.status(500).json({ message: 'Error fetching dashboard statistics' });

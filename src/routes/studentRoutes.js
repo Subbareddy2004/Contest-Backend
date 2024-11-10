@@ -6,6 +6,7 @@ const Submission = require('../models/Submission');
 const Problem = require('../models/Problem');
 const Assignment = require('../models/Assignment');
 const Contest = require('../models/Contest');
+const bcrypt = require('bcryptjs');
 
 // Add this function at the top of the file
 const calculateLeaderboardRank = async (studentId) => {
@@ -416,6 +417,41 @@ router.post('/assignments/:assignmentId/problems/:problemId/submit', auth, async
   } catch (error) {
     console.error('Error submitting solution:', error);
     res.status(500).json({ message: 'Error submitting solution' });
+  }
+});
+
+// Update the password change endpoint
+router.put('/change-password', auth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    console.log('Password change request:', { userId: req.user.id });
+    
+    const student = await User.findById(req.user.id);
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    // Verify current password
+    const isMatch = await bcrypt.compare(currentPassword, student.password);
+    if (!isMatch) {
+      console.log('Current password verification failed');
+      return res.status(400).json({ message: 'Current password is incorrect' });
+    }
+
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    
+    // Update password in database
+    await User.findByIdAndUpdate(req.user.id, {
+      password: hashedPassword
+    });
+
+    console.log('Password updated successfully for user:', student.email);
+    res.json({ message: 'Password updated successfully' });
+  } catch (error) {
+    console.error('Error changing password:', error);
+    res.status(500).json({ message: 'Error changing password' });
   }
 });
 

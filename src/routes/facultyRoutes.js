@@ -57,6 +57,34 @@ router.put('/profile', auth, isFaculty, async (req, res) => {
   }
 });
 
+// Change faculty password
+router.put('/change-password', auth, isFaculty, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const faculty = await User.findById(req.user.id);
+    
+    // Verify current password
+    const isMatch = await bcrypt.compare(currentPassword, faculty.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Current password is incorrect' });
+    }
+
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    
+    // Update password
+    await User.findByIdAndUpdate(req.user.id, {
+      password: hashedPassword
+    });
+
+    res.json({ message: 'Password updated successfully' });
+  } catch (error) {
+    console.error('Error changing faculty password:', error);
+    res.status(500).json({ message: 'Error changing password' });
+  }
+});
+
 // Get dashboard stats
 router.get('/dashboard-stats', auth, isFaculty, async (req, res) => {
   try {

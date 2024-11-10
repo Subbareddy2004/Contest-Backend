@@ -5,45 +5,36 @@ const User = require('../models/User');
 const { auth } = require('../middleware/auth');
 const bcrypt = require('bcryptjs');
 
+// Update the login endpoint
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    console.log('Login attempt:', { email, password: '***' });
+    console.log('Login attempt for:', email);
 
+    // Find user
     const user = await User.findOne({ email });
     if (!user) {
       console.log('User not found:', email);
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    console.log('Found user:', {
-      id: user._id,
-      email: user.email,
-      role: user.role,
-      hasPassword: !!user.password
-    });
-
-    console.log('Stored hashed password:', user.password);
-    console.log('Attempting to match with:', password);
-
+    // Verify password
     const isMatch = await bcrypt.compare(password, user.password);
-    console.log('Password match result:', isMatch);
-
+    console.log('Password verification result:', isMatch);
+    
     if (!isMatch) {
-      console.log('Password mismatch for user:', email);
-      return res.status(401).json({ message: 'Invalid email or password' });
+      console.log('Password mismatch for:', email);
+      return res.status(400).json({ message: 'Invalid credentials' });
     }
 
+    // Generate token
     const token = jwt.sign(
-      { 
-        id: user._id,
-        role: user.role,
-        email: user.email
-      },
+      { id: user._id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
+    console.log('Login successful for:', email);
     res.json({
       token,
       user: {
@@ -53,10 +44,9 @@ router.post('/login', async (req, res) => {
         role: user.role
       }
     });
-
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ message: 'Error during login' });
+    res.status(500).json({ message: 'Error logging in' });
   }
 });
 
