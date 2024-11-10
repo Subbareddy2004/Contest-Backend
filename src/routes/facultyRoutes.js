@@ -1372,5 +1372,25 @@ router.get('/dashboard', auth, async (req, res) => {
   }
 });
 
+router.get('/assignments/:assignmentId/submissions/:studentId', auth, async (req, res) => {
+  try {
+    const submissions = await Submission.find({
+      assignment: req.params.assignmentId,
+      student: req.params.studentId
+    }).populate('problem', 'title'); // Populate the problem title
+
+    // Map submissions to include problem titles
+    const submissionsWithTitles = submissions.map(sub => ({
+      ...sub.toObject(),
+      problemTitle: sub.problem?.title || `Problem ${sub.problemNumber}`,
+    }));
+
+    res.json(submissionsWithTitles);
+  } catch (error) {
+    console.error('Error fetching submissions:', error);
+    res.status(500).json({ message: 'Error fetching submissions' });
+  }
+});
+
 module.exports = router;
  

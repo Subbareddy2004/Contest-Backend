@@ -12,12 +12,10 @@ const submissionSchema = new mongoose.Schema({
   },
   assignment: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Assignment',
-    required: true
+    ref: 'Assignment'
   },
   problemId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Problem',
     required: true
   },
   code: {
@@ -30,8 +28,8 @@ const submissionSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['PASSED', 'FAILED', 'PENDING'],
-    default: 'PENDING'
+    enum: ['PASSED', 'FAILED'],
+    required: true
   },
   submittedAt: {
     type: Date,
