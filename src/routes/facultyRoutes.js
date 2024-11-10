@@ -725,68 +725,54 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
 // Get faculty dashboard stats
 router.get('/dashboard', auth, isFaculty, async (req, res) => {
   try {
-    const now = new Date();
-    
-    // Get contest statistics
-    const [contestCount, activeContestCount] = await Promise.all([
-      Contest.countDocuments({ createdBy: req.user.id }),
+    const facultyId = req.user.id;
+    const currentDate = new Date();
+
+    // Get basic stats
+    const [assignments, totalStudents, totalContests, activeContests] = await Promise.all([
+      Assignment.find({ createdBy: facultyId }).select('title problems submissions').lean(),
+      User.countDocuments({ addedBy: facultyId, role: 'student' }),
+      Contest.countDocuments({ createdBy: facultyId }),
       Contest.countDocuments({
-        createdBy: req.user.id,
-        startTime: { $lte: now },
-        $expr: {
-          $gt: [
-            { $add: ['$startTime', { $multiply: ['$duration', 60000] }] },
-            now
-          ]
-        }
+        createdBy: facultyId,
+        startTime: { $lte: currentDate },
+        $or: [
+          { endTime: { $gte: currentDate } },
+          { startTime: { $gte: currentDate } }
+        ]
       })
     ]);
 
-    // Get submission statistics
-    const submissionCount = await Submission.countDocuments({
-      'contest.createdBy': req.user.id
+    // Process assignment stats
+    const assignmentStats = assignments.map(assignment => {
+      const studentsCompleted = new Set(
+        (assignment.submissions || [])
+          .filter(sub => sub.status === 'PASSED')
+          .map(sub => sub.student.toString())
+      ).size;
+
+      return {
+        _id: assignment._id,
+        title: assignment.title,
+        totalStudents,
+        completedStudents: studentsCompleted,
+        completionRate: Math.round((studentsCompleted / totalStudents) * 100)
+      };
     });
 
-    // Get student count
-    const studentCount = await User.countDocuments({ role: 'student' });
-
-    // Get submission statistics by date
-    const submissionStats = await Submission.aggregate([
-      {
-        $match: {
-          'contest.createdBy': req.user.id,
-          createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
-        }
-      },
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-          count: { $sum: 1 }
-        }
-      },
-      {
-        $sort: { _id: 1 }
-      },
-      {
-        $project: {
-          name: '$_id',
-          count: 1,
-          _id: 0
-        }
-      }
-    ]);
-
-    res.json({
+    const response = {
       stats: {
-        contestCount,
-        activeContestCount,
-        submissionCount,
-        studentCount
+        totalAssignments: assignments.length,
+        totalStudents,
+        totalContests,
+        activeContests
       },
-      submissionStats
-    });
+      assignmentStats
+    };
+
+    res.json(response);
   } catch (error) {
-    console.error('Error fetching dashboard stats:', error);
+    console.error('Error fetching faculty dashboard:', error);
     res.status(500).json({ message: 'Error fetching dashboard statistics' });
   }
 });
@@ -1309,6 +1295,52 @@ router.get('/assignments/:id/submissions', auth, isFaculty, async (req, res) => 
   } catch (error) {
     console.error('Error fetching submissions:', error);
     res.status(500).json({ message: 'Error fetching submissions' });
+  }
+});
+
+// Add this route for faculty dashboard
+router.get('/dashboard', auth, async (req, res) => {
+  try {
+    const facultyId = req.user.id;
+
+    // Get all assignments created by this faculty
+    const assignments = await Assignment.find({ createdBy: facultyId })
+      .select('title problems submissions')
+      .lean();
+
+    // Get total students under this faculty
+    const totalStudents = await User.countDocuments({
+      addedBy: facultyId,
+      role: 'student'
+    });
+
+    // Process each assignment to get completion stats
+    const assignmentStats = assignments.map(assignment => {
+      const studentsCompleted = new Set(
+        assignment.submissions
+          .filter(sub => sub.status === 'PASSED')
+          .map(sub => sub.student.toString())
+      ).size;
+
+      return {
+        _id: assignment._id,
+        title: assignment.title,
+        totalStudents,
+        completedStudents: studentsCompleted,
+        completionRate: Math.round((studentsCompleted / totalStudents) * 100)
+      };
+    });
+
+    const response = {
+      totalAssignments: assignments.length,
+      totalStudents,
+      assignmentStats
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error('Error fetching faculty dashboard:', error);
+    res.status(500).json({ message: 'Error fetching dashboard statistics' });
   }
 });
 
