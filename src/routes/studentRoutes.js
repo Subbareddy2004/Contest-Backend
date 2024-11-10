@@ -289,11 +289,18 @@ router.get('/problems', auth, async (req, res) => {
   }
 });
 
-// Add this route for student dashboard data
+
 router.get('/dashboard', auth, async (req, res) => {
   try {
     const userId = req.user.id;
+    console.log('Fetching dashboard for student:', userId);
     const now = new Date();
+
+    // First get the student with their faculty reference
+    const student = await User.findById(userId).populate('addedBy');
+    if (!student || !student.addedBy) {
+      return res.status(404).json({ message: 'Student or faculty not found' });
+    }
 
     // Get contest statistics
     const [activeContests, participatedContests] = await Promise.all([
@@ -312,66 +319,67 @@ router.get('/dashboard', auth, async (req, res) => {
       })
     ]);
 
-    // Get submission statistics
-    const submissionStats = await Submission.aggregate([
-      {
-        $match: {
-          'student': userId,
-          createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
-        }
-      },
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-          count: { $sum: 1 },
-          passed: {
-            $sum: { $cond: [{ $eq: ['$status', 'PASSED'] }, 1, 0] }
-          }
-        }
-      },
-      {
-        $sort: { _id: 1 }
-      },
-      {
-        $project: {
-          name: '$_id',
-          submissions: '$count',
-          passed: 1,
-          _id: 0
-        }
+    // Get assignments with their progress
+    const assignments = await Assignment.find({
+      createdBy: student.addedBy._id
+    })
+    .select('title problems submissions')
+    .lean();
+
+    let completedAssignments = 0;
+    let totalAssignments = assignments.length;
+
+    // Process each assignment
+    const processedAssignments = assignments.map(assignment => {
+      const totalProblems = assignment.problems.length;
+      let problemsSolved = 0;
+
+      // Count solved problems for this student
+      const studentSubmissions = assignment.submissions.filter(sub => 
+        sub.student.toString() === userId && sub.status === 'PASSED'
+      );
+      
+      // Count unique solved problems
+      const solvedProblemIds = new Set(
+        studentSubmissions.map(sub => sub.problemId.toString())
+      );
+      problemsSolved = solvedProblemIds.size;
+
+      // Check if assignment is completed
+      if (problemsSolved === totalProblems) {
+        completedAssignments++;
       }
-    ]);
 
-    // Get total solved problems and success rate
-    const submissionSummary = await Submission.aggregate([
-      {
-        $match: { 'student': userId }
-      },
-      {
-        $group: {
-          _id: null,
-          totalSubmissions: { $sum: 1 },
-          passedSubmissions: {
-            $sum: { $cond: [{ $eq: ['$status', 'PASSED'] }, 1, 0] }
-          }
-        }
-      }
-    ]);
+      return {
+        ...assignment,
+        totalProblems,
+        problemsSolved
+      };
+    });
 
-    const summary = submissionSummary[0] || { totalSubmissions: 0, passedSubmissions: 0 };
-    const successRate = summary.totalSubmissions > 0 
-      ? (summary.passedSubmissions / summary.totalSubmissions * 100).toFixed(1)
-      : 0;
+    console.log(`Student ${userId} stats:`, {
+      facultyId: student.addedBy._id,
+      totalAssignments,
+      completedAssignments,
+      assignments: processedAssignments
+    });
 
-    res.json({
+    const response = {
       stats: {
         activeContests,
         participatedContests,
-        totalSubmissions: summary.totalSubmissions,
-        successRate
+        completedAssignments
       },
-      submissionStats
-    });
+      performanceStats: [{
+        category: 'Assignments',
+        total: totalAssignments,
+        completed: completedAssignments
+      }]
+    };
+
+    console.log('Sending response:', JSON.stringify(response, null, 2));
+    res.json(response);
+
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
     res.status(500).json({ message: 'Error fetching dashboard statistics' });
