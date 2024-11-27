@@ -5,7 +5,7 @@ const transporter = nodemailer.createTransport({
   service: process.env.EMAIL_SERVICE || 'gmail',
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD // Use app-specific password for Gmail
+    pass: process.env.EMAIL_PASSWORD
   }
 });
 
@@ -40,6 +40,30 @@ const sendWelcomeEmail = async (studentData) => {
   }
 };
 
+const sendPasswordResetEmail = async (email, resetToken) => {
+  try {
+    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: email,
+      subject: 'Password Reset Request',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Password Reset Request</h2>
+          <p>Click the button below to reset your password:</p>
+          <a href="${resetUrl}" style="display: inline-block; padding: 10px 20px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 5px;">Reset Password</a>
+          <p>If the button doesn't work, copy and paste this link in your browser:</p>
+          <p>${resetUrl}</p>
+        </div>
+      `
+    });
+  } catch (error) {
+    console.error('Error sending password reset email:', error);
+    throw error;
+  }
+};
+
 module.exports = {
-  sendWelcomeEmail
+  sendWelcomeEmail,
+  sendPasswordResetEmail
 }; 
