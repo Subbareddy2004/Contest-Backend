@@ -19,6 +19,7 @@ const Assignment = require('./models/Assignment');
 const User = require('./models/User');
 const Problem = require('./models/Problem');
 const dashboardRoutes = require('./routes/dashboardRoutes');
+const codeRoutes = require('./routes/codeRoutes');
 
 const app = express();
 
@@ -61,6 +62,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/contests', contestRoutes);
 app.use('/api/execute', contestRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/code', codeRoutes);
 
 // Add this before your error handling middleware
 app.use((err, req, res, next) => {
