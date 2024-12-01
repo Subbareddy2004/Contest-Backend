@@ -20,6 +20,7 @@ const User = require('./models/User');
 const Problem = require('./models/Problem');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const codeRoutes = require('./routes/codeRoutes');
+const fileUpload = require('express-fileupload');
 
 const app = express();
 
@@ -49,6 +50,13 @@ app.use((req, res, next) => {
   req.userRole = userRole;
   next();
 });
+
+app.use(fileUpload({
+  createParentPath: true,
+  limits: { 
+    fileSize: 5 * 1024 * 1024 // 5MB max file size
+  },
+}));
 
 // Routes
 app.use('/api/auth', authRoutes);

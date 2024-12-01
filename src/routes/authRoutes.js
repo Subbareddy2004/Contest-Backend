@@ -166,4 +166,42 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
+// Student login route
+router.post('/student/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    // Find student by email
+    const student = await User.findOne({ email, role: 'student' });
+    if (!student) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // Check if password matches register number
+    if (password !== student.regNumber) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: student._id, role: 'student' },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: student._id,
+        name: student.name,
+        email: student.email,
+        role: 'student'
+      }
+    });
+  } catch (error) {
+    console.error('Student login error:', error);
+    res.status(500).json({ message: 'Error logging in' });
+  }
+});
+
 module.exports = router;

@@ -11,6 +11,7 @@ const { Readable } = require('stream');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const Contest = require('../models/Contest');
+const mongoose = require('mongoose');
 
 // Configure multer for memory storage
 const upload = multer({
@@ -595,6 +596,425 @@ router.get('/dashboard', auth, isAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error fetching admin dashboard stats:', error);
     res.status(500).json({ message: 'Error fetching dashboard statistics' });
+  }
+});
+
+// Create faculty with initial students
+router.post('/faculty/create', auth, isAdmin, async (req, res) => {
+  try {
+    const { name, email, password, students } = req.body;
+    
+    // Create faculty user
+    const faculty = new User({
+      name,
+      email,
+      password,
+      role: 'faculty'
+    });
+    await faculty.save();
+
+    // Handle students if provided
+    if (students && students.length > 0) {
+      const studentUsers = await Promise.all(students.map(async (student) => {
+        const studentUser = new User({
+          name: student.name,
+          email: student.email,
+          password: student.password || 'defaultPassword123', // You might want to generate random passwords
+          role: 'student',
+          assignedFaculty: faculty._id
+        });
+        await studentUser.save();
+        return studentUser;
+      }));
+    }
+
+    res.status(201).json({ message: 'Faculty created successfully', faculty });
+  } catch (error) {
+    console.error('Error creating faculty:', error);
+    res.status(500).json({ message: 'Error creating faculty' });
+  }
+});
+
+// Bulk upload students route
+router.post('/faculty/:facultyId/students/bulk', auth, isAdmin, async (req, res) => {
+  try {
+    const { facultyId } = req.params;
+    
+    // Log request details
+    console.log('Bulk upload request:', {
+      files: req.files,
+      facultyId: facultyId
+    });
+
+    // Verify faculty exists
+    const faculty = await User.findOne({ _id: facultyId, role: 'faculty' });
+    if (!faculty) {
+      console.log('Faculty not found:', facultyId);
+      return res.status(404).json({ message: 'Faculty not found' });
+    }
+
+    // Check if file exists
+    if (!req.files || !req.files.file) {
+      console.log('No file in request:', req.files);
+      return res.status(400).json({ 
+        message: 'No file uploaded',
+        details: 'Please ensure you are sending a file with the key "file"'
+      });
+    }
+
+    const file = req.files.file;
+    
+    // Log file details
+    console.log('File details:', {
+      name: file.name,
+      size: file.size,
+      mimetype: file.mimetype
+    });
+
+    // Verify file type
+    if (!file.name.endsWith('.csv')) {
+      return res.status(400).json({ 
+        message: 'Invalid file type',
+        details: 'Please upload a CSV file'
+      });
+    }
+
+    const csvString = file.data.toString();
+    const rows = csvString.split('\n');
+
+    console.log('CSV Processing:', {
+      totalRows: rows.length,
+      firstRow: rows[0],
+      sampleData: rows.slice(0, 2)
+    });
+
+    const students = [];
+    const errors = [];
+
+    // Skip header row if it exists
+    const dataRows = rows[0].toLowerCase().includes('name') ? rows.slice(1) : rows;
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const row = dataRows[i].trim();
+      if (!row) continue; // Skip empty rows
+      
+      const [name, regNumber, email] = row.split(',').map(field => field.trim());
+      
+      console.log(`Processing row ${i + 1}:`, { name, regNumber, email });
+
+      if (!name || !regNumber || !email) {
+        errors.push(`Row ${i + 1}: Missing required fields. Found: name=${name}, regNumber=${regNumber}, email=${email}`);
+        continue;
+      }
+
+      try {
+        // Check for existing student
+        const existingStudent = await User.findOne({
+          $or: [
+            { email },
+            { regNumber },
+            { registerNumber: regNumber }
+          ],
+          role: 'student'
+        });
+
+        if (existingStudent) {
+          errors.push(`Row ${i + 1}: Student with email ${email} or registration number ${regNumber} already exists`);
+          continue;
+        }
+
+        const student = new User({
+          name,
+          email,
+          regNumber,
+          registerNumber: regNumber,
+          addedBy: facultyId,
+          assignedFaculty: facultyId,
+          role: 'student',
+          password: regNumber
+        });
+
+        await student.save();
+        students.push(student);
+        console.log(`Successfully added student from row ${i + 1}:`, {
+          name: student.name,
+          email: student.email,
+          regNumber: student.regNumber
+        });
+
+      } catch (error) {
+        console.error(`Error processing row ${i + 1}:`, error);
+        errors.push(`Row ${i + 1}: ${error.message}`);
+      }
+    }
+
+    console.log('Bulk upload complete:', {
+      totalProcessed: dataRows.length,
+      successCount: students.length,
+      errorCount: errors.length,
+      errors: errors
+    });
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        message: 'Some students could not be imported',
+        errors,
+        successCount: students.length,
+        details: 'Check the errors array for specific issues with each row'
+      });
+    }
+
+    res.json({
+      message: 'Students imported successfully',
+      count: students.length,
+      students: students.map(s => ({
+        name: s.name,
+        email: s.email,
+        regNumber: s.regNumber
+      }))
+    });
+
+  } catch (error) {
+    console.error('Fatal error in bulk upload:', error);
+    res.status(500).json({ 
+      message: 'Error uploading students',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// Get students for a specific faculty
+router.get('/faculty/:facultyId/students', auth, isAdmin, async (req, res) => {
+  try {
+    const { facultyId } = req.params;
+    console.log('Fetching students for faculty:', facultyId);
+    
+    // Verify faculty exists
+    const faculty = await User.findOne({ _id: facultyId, role: 'faculty' });
+    if (!faculty) {
+      console.log('Faculty not found:', facultyId);
+      return res.status(404).json({ message: 'Faculty not found' });
+    }
+    console.log('Found faculty:', faculty.name);
+
+    // Find all students assigned to this faculty
+    const students = await User.find({ 
+      addedBy: facultyId,
+      role: 'student'
+    }).select('name email regNumber createdAt');
+
+    console.log('Query results:', {
+      facultyId,
+      studentsFound: students.length,
+      students: students
+    });
+
+    res.json(students);
+  } catch (error) {
+    console.error('Error fetching faculty students:', error);
+    res.status(500).json({ message: 'Error fetching students' });
+  }
+});
+
+// Add student route
+router.post('/faculty/:facultyId/students', auth, isAdmin, async (req, res) => {
+  try {
+    const { facultyId } = req.params;
+    const { name, email, regNumber } = req.body;
+
+    console.log('Creating student with data:', {
+      facultyId,
+      name,
+      email,
+      regNumber
+    });
+
+    // Verify faculty exists
+    const faculty = await User.findOne({ _id: facultyId, role: 'faculty' });
+    if (!faculty) {
+      return res.status(404).json({ message: 'Faculty not found' });
+    }
+
+    // Check if student with same email or regNumber already exists
+    const existingStudent = await User.findOne({
+      $or: [
+        { email }, 
+        { regNumber }, 
+        { registerNumber: regNumber }
+      ],
+      role: 'student'
+    });
+
+    if (existingStudent) {
+      return res.status(400).json({ 
+        message: 'Student with this email or registration number already exists' 
+      });
+    }
+
+    // Create the student with both field names for compatibility
+    const student = new User({
+      name,
+      email,
+      regNumber,
+      registerNumber: regNumber,  // Set both fields
+      addedBy: facultyId,
+      assignedFaculty: facultyId, // Set both fields
+      role: 'student',
+      password: regNumber // Initial password is the registration number
+    });
+
+    await student.save();
+    console.log('Created student:', student);
+
+    res.status(201).json({
+      message: 'Student added successfully',
+      student: {
+        _id: student._id,
+        name: student.name,
+        email: student.email,
+        regNumber: student.regNumber
+      }
+    });
+  } catch (error) {
+    console.error('Error creating student:', error);
+    res.status(500).json({ 
+      message: 'Error creating student',
+      error: error.message 
+    });
+  }
+});
+
+// Debug route to check all users
+router.get('/debug/users', auth, isAdmin, async (req, res) => {
+  try {
+    const users = await User.find({}).select('-password');
+    res.json({
+      total: users.length,
+      faculty: users.filter(u => u.role === 'faculty'),
+      students: users.filter(u => u.role === 'student')
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching users' });
+  }
+});
+
+// Debug route to check faculty and their students
+router.get('/debug/faculty-students/:facultyId', auth, isAdmin, async (req, res) => {
+  try {
+    const { facultyId } = req.params;
+    
+    // Find faculty
+    const faculty = await User.findById(facultyId);
+    if (!faculty) {
+      return res.status(404).json({ message: 'Faculty not found' });
+    }
+
+    // Find all students in the database
+    const allStudents = await User.find({ role: 'student' });
+    
+    // Find students assigned to this faculty
+    const assignedStudents = await User.find({ 
+      addedBy: facultyId,
+      role: 'student'
+    });
+
+    res.json({
+      faculty: {
+        _id: faculty._id,
+        name: faculty.name,
+        email: faculty.email
+      },
+      totalStudents: allStudents.length,
+      assignedStudents: assignedStudents,
+      studentsWithFacultyId: allStudents.filter(s => s.addedBy?.toString() === facultyId)
+    });
+  } catch (error) {
+    console.error('Debug route error:', error);
+    res.status(500).json({ message: 'Error in debug route' });
+  }
+});
+
+// Update student route
+router.put('/faculty/:facultyId/students/:studentId', auth, isAdmin, async (req, res) => {
+  try {
+    const { facultyId, studentId } = req.params;
+    const { name, email, regNumber } = req.body;
+
+    console.log('Updating student:', {
+      facultyId,
+      studentId,
+      updateData: { name, email, regNumber }
+    });
+
+    // Verify faculty exists
+    const faculty = await User.findOne({ _id: facultyId, role: 'faculty' });
+    if (!faculty) {
+      return res.status(404).json({ message: 'Faculty not found' });
+    }
+
+    // Find and update the student
+    const student = await User.findOneAndUpdate(
+      { 
+        _id: studentId,
+        addedBy: facultyId,
+        role: 'student'
+      },
+      { 
+        name,
+        email,
+        regNumber
+      },
+      { new: true }
+    );
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    console.log('Updated student:', student);
+
+    res.json({
+      message: 'Student updated successfully',
+      student: {
+        _id: student._id,
+        name: student.name,
+        email: student.email,
+        regNumber: student.regNumber
+      }
+    });
+  } catch (error) {
+    console.error('Error updating student:', error);
+    res.status(500).json({ message: 'Error updating student' });
+  }
+});
+
+// Delete student route
+router.delete('/faculty/:facultyId/students/:studentId', auth, isAdmin, async (req, res) => {
+  try {
+    const { facultyId, studentId } = req.params;
+
+    // Verify faculty exists
+    const faculty = await User.findOne({ _id: facultyId, role: 'faculty' });
+    if (!faculty) {
+      return res.status(404).json({ message: 'Faculty not found' });
+    }
+
+    // Find and delete the student
+    const student = await User.findOneAndDelete({
+      _id: studentId,
+      addedBy: facultyId,
+      role: 'student'
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    res.json({ message: 'Student deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting student:', error);
+    res.status(500).json({ message: 'Error deleting student' });
   }
 });
 

@@ -22,7 +22,9 @@ const userSchema = new mongoose.Schema({
   },
   regNumber: {
     type: String,
-    sparse: true
+    required: function() {
+      return this.role === 'student';
+    }
   },
   class: {
     type: String,
@@ -32,7 +34,7 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: function() {
-      return this.role === 'student' || this.role === 'faculty';
+      return this.role === 'student';
     }
   },
   createdAt: {
@@ -40,8 +42,21 @@ const userSchema = new mongoose.Schema({
     default: Date.now
   },
   resetPasswordToken: String,
-  resetPasswordExpires: Date
-});
+  resetPasswordExpires: Date,
+  assignedFaculty: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: function() {
+      return this.role === 'student';
+    }
+  },
+  registerNumber: {
+    type: String,
+    required: function() {
+      return this.role === 'student';
+    }
+  }
+}, { timestamps: true });
 
 // Hash password before saving if it's modified
 userSchema.pre('save', async function(next) {
