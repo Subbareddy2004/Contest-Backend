@@ -21,6 +21,7 @@ const Problem = require('./models/Problem');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const codeRoutes = require('./routes/codeRoutes');
 const fileUpload = require('express-fileupload');
+const adminContestRoutes = require('./routes/adminContestRoutes');
 
 const app = express();
 
@@ -71,6 +72,9 @@ app.use('/api/contests', contestRoutes);
 app.use('/api/execute', contestRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/code', codeRoutes);
+app.use('/api/admin/contests', adminContestRoutes);
+app.use('/admin/contests', adminContestRoutes);
+
 
 // Add this before your error handling middleware
 app.use((err, req, res, next) => {

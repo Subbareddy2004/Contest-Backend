@@ -72,7 +72,11 @@ const contestSchema = new mongoose.Schema({
         default: Date.now
       }
     }]
-  }]
+  }],
+  isAdminContest: {
+    type: Boolean,
+    default: false
+  }
 }, {
   timestamps: true
 });

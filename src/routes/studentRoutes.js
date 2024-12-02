@@ -7,6 +7,8 @@ const Problem = require('../models/Problem');
 const Assignment = require('../models/Assignment');
 const Contest = require('../models/Contest');
 const bcrypt = require('bcryptjs');
+const Report = require('../models/Report');
+const { sendEmail } = require('../utils/emailService');
 
 // Add this function at the top of the file
 const calculateLeaderboardRank = async (studentId) => {
@@ -452,6 +454,21 @@ router.put('/change-password', auth, async (req, res) => {
   } catch (error) {
     console.error('Error changing password:', error);
     res.status(500).json({ message: 'Error changing password' });
+  }
+});
+
+// Add new report route
+router.post('/report', auth, async (req, res) => {
+  try {
+    const report = new Report({
+      student: req.user.id,
+      ...req.body
+    });
+    await report.save();
+    res.status(201).json({ message: 'Report submitted successfully' });
+  } catch (error) {
+    console.error('Error submitting report:', error);
+    res.status(500).json({ message: 'Error submitting report' });
   }
 });
 

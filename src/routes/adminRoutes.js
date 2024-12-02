@@ -12,6 +12,8 @@ const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const Contest = require('../models/Contest');
 const mongoose = require('mongoose');
+const Report = require('../models/Report');
+const { sendEmail } = require('../utils/emailService');
 
 // Configure multer for memory storage
 const upload = multer({
@@ -1015,6 +1017,89 @@ router.delete('/faculty/:facultyId/students/:studentId', auth, isAdmin, async (r
   } catch (error) {
     console.error('Error deleting student:', error);
     res.status(500).json({ message: 'Error deleting student' });
+  }
+});
+
+// Add these routes to handle admin contests
+router.get('/contests', auth, isAdmin, async (req, res) => {
+  try {
+    const contests = await Contest.find({ isAdminContest: true })
+      .populate('problems')
+      .sort({ createdAt: -1 });
+    res.json(contests);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching contests' });
+  }
+});
+
+router.post('/contests', auth, isAdmin, async (req, res) => {
+  try {
+    const contest = new Contest({
+      ...req.body,
+      isAdminContest: true,
+      createdBy: req.user.id
+    });
+    await contest.save();
+    res.status(201).json(contest);
+  } catch (error) {
+    res.status(500).json({ message: 'Error creating contest' });
+  }
+});
+
+router.put('/contests/:id', auth, isAdmin, async (req, res) => {
+  try {
+    const contest = await Contest.findOneAndUpdate(
+      { _id: req.params.id, isAdminContest: true },
+      req.body,
+      { new: true }
+    );
+    if (!contest) {
+      return res.status(404).json({ message: 'Contest not found' });
+    }
+    res.json(contest);
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating contest' });
+  }
+});
+
+router.delete('/contests/:id', auth, isAdmin, async (req, res) => {
+  try {
+    const contest = await Contest.findOneAndDelete({
+      _id: req.params.id,
+      isAdminContest: true
+    });
+    if (!contest) {
+      return res.status(404).json({ message: 'Contest not found' });
+    }
+    res.json({ message: 'Contest deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting contest' });
+  }
+});
+
+// Get all reports
+router.get('/reports', auth, isAdmin, async (req, res) => {
+  try {
+    const reports = await Report.find()
+      .populate('student', 'name email')
+      .sort('-createdAt');
+    res.json(reports);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching reports' });
+  }
+});
+
+// Update report status
+router.patch('/reports/:id', auth, isAdmin, async (req, res) => {
+  try {
+    const report = await Report.findByIdAndUpdate(
+      req.params.id,
+      { status: req.body.status },
+      { new: true }
+    );
+    res.json(report);
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating report' });
   }
 });
 
