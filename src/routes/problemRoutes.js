@@ -4,7 +4,7 @@ const { auth } = require('../middleware/auth');
 const { isStudent } = require('../middleware/roleCheck');
 const { isFaculty } = require('../middleware/roleCheck');
 const Problem = require('../models/Problem');
-const { executeCode } = require('../services/codeExecutionService');
+const axios = require('axios');
 
 // Student routes should come before generic routes
 // Get all problems for students
@@ -66,25 +66,61 @@ router.post('/student/problems/:id/run', auth, isStudent, async (req, res) => {
       });
     }
 
-    // Execute code against test cases
+    // Map language to Judge0 language ID
+    const languageMap = {
+      'cpp': 54,    // C++ (GCC 9.2.0)
+      'c': 50,      // C (GCC 9.2.0)
+      'python': 71, // Python (3.8.1)
+      'java': 62    // Java (OpenJDK 13.0.1)
+    };
+
+    const judge0LanguageId = languageMap[language];
+    if (!judge0LanguageId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Unsupported programming language'
+      });
+    }
+
+    // Execute code against test case
     try {
       const testCase = problem.testCases[0]; // Use first test case for initial run
-      const result = await executeCode(code, language, testCase.input);
 
-      // Compare output
-      const expectedOutput = testCase.output.trim();
-      const actualOutput = (result.output || '').trim();
-      const passed = actualOutput === expectedOutput;
+      // Prepare submission for Judge0
+      const submission = {
+        source_code: Buffer.from(code).toString('base64'),
+        language_id: judge0LanguageId,
+        stdin: Buffer.from(testCase.input).toString('base64'),
+        expected_output: Buffer.from(testCase.output).toString('base64')
+      };
+
+      // Submit to Judge0
+      const response = await axios.post(
+        `${process.env.JUDGE0_API_URL}/submissions?base64_encoded=true&wait=true`,
+        submission,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'X-RapidAPI-Host': process.env.JUDGE0_HOST,
+            'X-RapidAPI-Key': process.env.JUDGE0_API_KEY
+          }
+        }
+      );
+
+      // Process Judge0 response
+      const actualOutput = Buffer.from(response.data.stdout || '', 'base64').toString();
+      const errorOutput = Buffer.from(response.data.stderr || '', 'base64').toString();
+      const passed = response.data.status.id === 3; // 3 is Accepted in Judge0
 
       res.json({
         success: true,
-        output: result.output,
-        error: result.error,
+        output: actualOutput,
+        error: errorOutput,
         testCase: {
           input: testCase.input,
-          expectedOutput,
-          actualOutput,
-          passed
+          expectedOutput: testCase.output,
+          actualOutput: actualOutput,
+          passed: passed
         }
       });
 
@@ -92,7 +128,7 @@ router.post('/student/problems/:id/run', auth, isStudent, async (req, res) => {
       console.error('Code execution error:', execError);
       res.status(400).json({
         success: false,
-        message: execError.message,
+        message: execError.response?.data?.message || execError.message,
         isExecutionError: true
       });
     }
@@ -101,7 +137,8 @@ router.post('/student/problems/:id/run', auth, isStudent, async (req, res) => {
     console.error('Error processing code execution:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error while processing code execution'
+      message: 'Internal server error while processing code execution',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });

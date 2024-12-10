@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const axios = require('axios');
 
-const JUDGE0_API = 'https://judge0-ce.p.rapidapi.com';
+const JUDGE0_API = process.env.JUDGE0_API_URL;
 const LANGUAGE_IDS = {
   'python': 71,    // Python (3.8.1)
   'cpp': 54,       // C++ (GCC 9.2.0)
@@ -26,59 +26,49 @@ const LANGUAGE_IDS = {
   'postgresql': 82 // PostgreSQL specific mode
 };
 
-router.get('/status/:token', async (req, res) => {
-  try {
-    const { token } = req.params;
-    
-    const result = await axios.get(`${JUDGE0_API}/submissions/${token}`, {
-      headers: {
-        'X-RapidAPI-Host': 'judge0-ce.p.rapidapi.com',
-        'X-RapidAPI-Key': process.env.RAPIDAPI_KEY
-      }
-    });
-
-    res.json(result.data);
-  } catch (error) {
-    console.error('Status check error:', error);
-    res.status(500).json({ error: 'Error checking submission status' });
-  }
-});
-
 router.post('/execute', async (req, res) => {
   try {
-    const { code, language_id, input } = req.body;
+    const { code, language, input } = req.body;
 
-    // First, create the submission
-    const submission = await axios.post(`${JUDGE0_API}/submissions`, {
-      source_code: code,
-      language_id: language_id,
-      stdin: input,
-      wait: true  // This tells Judge0 to wait for the result
-    }, {
+    // Validate language
+    const languageId = LANGUAGE_IDS[language];
+    if (!languageId) {
+      return res.status(400).json({ error: 'Unsupported programming language' });
+    }
+
+    // Prepare submission for Judge0
+    const submission = {
+      source_code: Buffer.from(code).toString('base64'),
+      language_id: languageId,
+      stdin: input ? Buffer.from(input).toString('base64') : '',
+      wait: true
+    };
+
+    // Submit to Judge0
+    const response = await axios.post(`${JUDGE0_API}/submissions?base64_encoded=true&wait=true`, submission, {
       headers: {
         'Content-Type': 'application/json',
-        'X-RapidAPI-Host': 'judge0-ce.p.rapidapi.com',
-        'X-RapidAPI-Key': process.env.RAPIDAPI_KEY
+        'X-RapidAPI-Host': process.env.JUDGE0_HOST,
+        'X-RapidAPI-Key': process.env.JUDGE0_API_KEY
       }
     });
 
-    // Wait a moment for the submission to be processed
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    // Get the result
-    const result = await axios.get(`${JUDGE0_API}/submissions/${submission.data.token}`, {
-      headers: {
-        'X-RapidAPI-Host': 'judge0-ce.p.rapidapi.com',
-        'X-RapidAPI-Key': process.env.RAPIDAPI_KEY
+    // Process the response
+    const result = {
+      output: response.data.stdout ? Buffer.from(response.data.stdout, 'base64').toString() : '',
+      error: response.data.stderr ? Buffer.from(response.data.stderr, 'base64').toString() : '',
+      compile_output: response.data.compile_output ? Buffer.from(response.data.compile_output, 'base64').toString() : '',
+      status: {
+        id: response.data.status.id,
+        description: response.data.status.description
       }
-    });
+    };
 
-    // Send back a more detailed response
     res.json({
-      ...result.data,
-      output: result.data.stdout || result.data.compile_output || result.data.stderr,
-      error: result.data.stderr || result.data.compile_output,
-      status: result.data.status
+      ...result,
+      output: result.output || result.compile_output || result.error,
+      error: result.error || result.compile_output,
+      status: result.status
     });
 
   } catch (error) {
@@ -90,54 +80,29 @@ router.post('/execute', async (req, res) => {
   }
 });
 
-router.post('/execute-sql', async (req, res) => {
+router.get('/status/:token', async (req, res) => {
   try {
-    const { code, dbType = 'sqlite' } = req.body;
+    const { token } = req.params;
     
-    // Configure database-specific settings
-    const dbConfig = {
-      sqlite: {
-        languageId: LANGUAGE_IDS.sql,
-        stdin: '', // SQLite doesn't need stdin
-      },
-      mysql: {
-        languageId: LANGUAGE_IDS.mysql,
-        stdin: JSON.stringify({
-          database: 'test_db',
-          query: code
-        })
-      },
-      postgresql: {
-        languageId: LANGUAGE_IDS.postgresql,
-        stdin: JSON.stringify({
-          database: 'test_db',
-          query: code
-        })
+    const result = await axios.get(`${JUDGE0_API}/submissions/${token}?base64_encoded=true`, {
+      headers: {
+        'X-RapidAPI-Host': process.env.JUDGE0_HOST,
+        'X-RapidAPI-Key': process.env.JUDGE0_API_KEY
       }
+    });
+
+    // Decode base64 outputs
+    const response = {
+      ...result.data,
+      stdout: result.data.stdout ? Buffer.from(result.data.stdout, 'base64').toString() : '',
+      stderr: result.data.stderr ? Buffer.from(result.data.stderr, 'base64').toString() : '',
+      compile_output: result.data.compile_output ? Buffer.from(result.data.compile_output, 'base64').toString() : ''
     };
 
-    const config = dbConfig[dbType];
-    
-    const response = await axios.post(`${JUDGE0_API}/submissions`, {
-      source_code: code,
-      language_id: config.languageId,
-      stdin: config.stdin,
-      expected_output: '',
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-RapidAPI-Host': process.env.JUDGE0_API_HOST,
-        'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
-      }
-    });
-
-    // ... rest of execution logic ...
-    
+    res.json(response);
   } catch (error) {
-    console.error('SQL execution error:', error);
-    res.status(500).json({ 
-      error: error.response?.data?.error || 'Error executing SQL query'
-    });
+    console.error('Status check error:', error);
+    res.status(500).json({ error: 'Error checking submission status' });
   }
 });
 

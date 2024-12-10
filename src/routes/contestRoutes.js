@@ -332,44 +332,62 @@ router.post('/:id/problems/:problemId/run', auth, async (req, res) => {
 
     const problem = problemData.problem;
     
-    const codexLanguage = {
-      'cpp': 'cpp',
-      'python': 'py',
-      'java': 'java',
-      'javascript': 'js',
-      'c': 'c'
+    // Map frontend language to Judge0 language IDs
+    const judge0LanguageId = {
+      'cpp': 54,    // C++ (GCC 9.2.0)
+      'python': 71, // Python (3.8.1)
+      'java': 62,   // Java (OpenJDK 13.0.1)
+      'javascript': 63, // JavaScript (Node.js 12.14.0)
+      'c': 50       // C (GCC 9.2.0)
     }[language];
 
-    if (!codexLanguage) {
+    if (!judge0LanguageId) {
       return res.status(400).json({ message: 'Unsupported language' });
     }
 
-    // Run code using Codex API
-    const response = await axios.post('https://api.codex.jaagrav.in', {
-      code,
-      language: codexLanguage,
-      input: problem.sampleInput
-    });
+    // Prepare submission for Judge0
+    const submission = {
+      source_code: Buffer.from(code).toString('base64'),
+      language_id: judge0LanguageId,
+      stdin: Buffer.from(problem.sampleInput).toString('base64'),
+      expected_output: Buffer.from(problem.sampleOutput).toString('base64')
+    };
 
-    // Format the results
-    const results = [{
-      passed: response.data.output.trim() === problem.sampleOutput.trim(),
+    // Submit to Judge0
+    const createResponse = await axios.post(
+      `${process.env.JUDGE0_API_URL}/submissions?base64_encoded=true&wait=true`,
+      submission,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-RapidAPI-Host': process.env.JUDGE0_HOST,
+          'X-RapidAPI-Key': process.env.JUDGE0_API_KEY
+        }
+      }
+    );
+
+    // Process Judge0 response
+    const result = {
+      passed: createResponse.data.status.id === 3, // 3 is Accepted in Judge0
       input: problem.sampleInput,
       expected: problem.sampleOutput,
-      actual: response.data.output,
-      error: response.data.error,
+      actual: Buffer.from(createResponse.data.stdout || '', 'base64').toString(),
+      error: Buffer.from(createResponse.data.stderr || '', 'base64').toString(),
       isHidden: false
-    }];
+    };
 
     res.json({
       success: true,
-      results,
-      allPassed: results.every(r => r.passed)
+      results: [result],
+      allPassed: result.passed
     });
 
   } catch (error) {
     console.error('Error running code:', error);
-    res.status(500).json({ message: 'Error running code' });
+    res.status(500).json({ 
+      message: 'Error running code',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 

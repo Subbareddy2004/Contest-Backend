@@ -189,12 +189,12 @@ router.get('/:id', auth, async (req, res) => {
   }
 });
 
-// Update the language mapping to match CodeX API requirements
+// Update the language mapping to match Judge0 API requirements
 const LANGUAGE_MAP = {
-  'cpp': 'cpp',
-  'c': 'c',
-  'python': 'py',
-  'java': 'java'
+  'cpp': 54,    // C++ (GCC 9.2.0)
+  'c': 50,      // C (GCC 9.2.0)
+  'python': 71, // Python (3.8.1)
+  'java': 62    // Java (OpenJDK 13.0.1)
 };
 
 // Add template programs
@@ -237,9 +237,9 @@ router.post('/:id/submit', auth, async (req, res) => {
       });
     }
 
-    // Map language to CodeX API format
-    const codexLanguage = LANGUAGE_MAP[language];
-    if (!codexLanguage) {
+    // Map language to Judge0 API format
+    const judge0LanguageId = LANGUAGE_MAP[language];
+    if (!judge0LanguageId) {
       return res.status(400).json({
         success: false,
         message: 'Unsupported programming language'
@@ -249,21 +249,37 @@ router.post('/:id/submit', auth, async (req, res) => {
     // Run test cases
     const results = await Promise.all(problem.testCases.map(async testCase => {
       try {
-        const response = await axios.post('https://api.codex.jaagrav.in', {
-          code,
-          language: codexLanguage,
-          input: testCase.input
-        });
+        // Prepare submission for Judge0
+        const submission = {
+          source_code: Buffer.from(code).toString('base64'),
+          language_id: judge0LanguageId,
+          stdin: Buffer.from(testCase.input).toString('base64'),
+          expected_output: Buffer.from(testCase.output).toString('base64')
+        };
 
-        const actualOutput = (response.data.output || '').trim();
-        const expectedOutput = testCase.output.trim();
-        const passed = actualOutput === expectedOutput;
+        // Submit to Judge0
+        const response = await axios.post(
+          `${process.env.JUDGE0_API_URL}/submissions?base64_encoded=true&wait=true`,
+          submission,
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'X-RapidAPI-Host': process.env.JUDGE0_HOST,
+              'X-RapidAPI-Key': process.env.JUDGE0_API_KEY
+            }
+          }
+        );
+
+        const actualOutput = Buffer.from(response.data.stdout || '', 'base64').toString();
+        const errorOutput = Buffer.from(response.data.stderr || '', 'base64').toString();
+        const passed = response.data.status.id === 3; // 3 is Accepted in Judge0
 
         return {
           passed,
           input: testCase.isHidden ? 'Hidden' : testCase.input,
-          expected: testCase.isHidden ? 'Hidden' : expectedOutput,
+          expected: testCase.isHidden ? 'Hidden' : testCase.output,
           actual: testCase.isHidden ? 'Hidden' : actualOutput,
+          error: errorOutput,
           isHidden: testCase.isHidden || false
         };
       } catch (error) {
@@ -307,7 +323,7 @@ router.post('/:id/submit', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error processing submission',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
